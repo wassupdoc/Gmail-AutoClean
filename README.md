@@ -1,55 +1,50 @@
 # Gmail AutoClean
 
-Automatically keep only the newest newsletters, coupons, recurring notifications, journals, and promotional emails while protecting anything important.
+Automatically keep only the newest newsletters, promotional emails, journals, recurring notifications, and other low-value email while protecting everything important.
 
-Instead of manually deleting hundreds of old emails, AutoClean learns which senders you want to manage and automatically keeps only the emails you care about.
-
----
-
-## Features
-
-✅ Learn new senders with a Gmail label
-
-✅ Keep newest **N** emails
-
-✅ Keep emails from the last **N days**
-
-✅ Individual sender rules
-
-✅ Per-sender Test Mode
-
-✅ Global Dry Run
-
-✅ Spreadsheet dashboard
-
-✅ Detailed test reports
-
-✅ Direct Gmail links for every email
-
-✅ Never delete starred emails
-
-✅ Never delete emails marked with AutoClean/Keep
-
-✅ Ignore senders entirely
-
-✅ Automatic statistics
+Instead of manually deleting hundreds (or thousands) of old emails, AutoClean learns which senders you want to manage and automatically applies customizable retention rules.
 
 ---
 
-## How It Works
+# Features
 
-There are three Gmail labels.
+- 📬 Learn new senders with a Gmail label
+- 🧹 Keep only the newest **N** emails
+- 📅 Keep emails from the last **N** days
+- ⚙️ Individual rules per sender
+- 🧪 Per-sender Test Mode
+- 🔒 Global Dry Run
+- ⭐ Never delete starred emails
+- 🏷 Never delete emails marked with **AutoClean/Keep**
+- 🚫 Ignore senders completely
+- 📊 Spreadsheet dashboard
+- 📈 Automatic statistics
+- 📄 Detailed test reports
+- 🔗 Direct Gmail links to every reviewed email
+- 📆 Tracks when a rule was enabled
+- 📬 Tracks the last email seen from every sender
+- ⏰ Automatic scheduled cleanup
+- 📋 Custom spreadsheet menu
+- 🎯 Zero manual spreadsheet setup
+
+---
+
+# How It Works
+
+AutoClean uses three Gmail labels.
 
 ```
 AutoClean
-    Learn
-    Keep
-    Ignore
+├── Learn
+├── Keep
+└── Ignore
 ```
 
-### AutoClean/Learn
+---
 
-Label **one email** from a sender.
+# AutoClean/Learn
+
+Apply this label to **one email** from a sender you want AutoClean to manage.
 
 Example:
 
@@ -59,83 +54,100 @@ Costco Newsletter
 
 Run AutoClean.
 
-The sender is automatically added to your registry spreadsheet.
+The sender is automatically added to the registry.
 
 The Learn label is automatically removed.
 
+Every new sender starts with:
+
+- Test Mode = ON
+- Active = ON
+- Keep newest 1 email
+
+Nothing is deleted until you've reviewed the results.
+
 ---
 
-### AutoClean/Keep
+# AutoClean/Keep
 
-Apply this label to any email or thread.
+Apply this label to **any email or thread**.
 
-Those emails will **never** be deleted, even if they would normally match the cleanup rules.
+Those emails are permanently protected.
 
 Examples:
 
 - Important coupon
-- Tax statement
+- Tax receipt
 - Medical journal issue
-- Receipt
+- Warranty information
+- Purchase confirmation
+
+Protected emails are excluded before retention rules are calculated.
 
 ---
 
-### AutoClean/Ignore
+# AutoClean/Ignore
 
 Apply this label to one email from a sender.
 
-The sender is added to the registry as
+The sender is added to the registry as:
 
 ```
 Active = FALSE
 ```
 
-and AutoClean will never process that sender unless you later enable it.
+AutoClean will never process that sender unless you later enable it manually.
 
-Examples:
+Perfect for:
 
-- Family emails
 - Friends
-- Work
+- Family
 - Banks
+- Work email
+- Schools
+- Anything accidentally added to Learn
 
 ---
 
 # Registry Spreadsheet
 
-The first time AutoClean runs it automatically creates
+The first run automatically creates:
 
 ```
 AutoClean Registry
 ```
 
-No manual setup is required.
+No manual setup required.
 
-Columns include:
+The spreadsheet is the control center.
+
+## Columns
 
 | Column | Description |
 |---------|-------------|
 | Sender | Email address |
 | Mode | count or days |
 | Value | Number of emails or days |
-| Active | Whether cleanup is enabled |
-| Test | Run in preview mode |
+| Active | Enable cleanup |
+| Test | Preview only |
 | Last Cleanup | Last execution |
-| Last Removed | Emails deleted last run |
-| Total Removed | Lifetime total |
+| Last Removed | Emails removed last run |
+| Total Removed | Lifetime deleted |
 | Would Delete | Preview count |
-| Protected Kept | Protected by Keep label |
-| Test Sheet | Generated review sheet |
-| Notes | User notes |
-| Added | Date sender added |
+| Protected Kept | Protected emails |
+| Test Sheet | Preview worksheet |
+| Notes | Optional notes |
+| Added | Rule creation date |
+| Enabled Since | Date cleanup became active |
+| Last Email Seen | Most recent email received |
 
 ---
 
-# Modes
+# Retention Modes
 
-## Count
+## Count Mode
 
-Keep newest
+Keep the newest
 
 ```
 5
@@ -147,7 +159,7 @@ Delete everything older.
 
 ---
 
-## Days
+## Days Mode
 
 Keep emails newer than
 
@@ -157,94 +169,111 @@ Keep emails newer than
 
 days.
 
-Delete older emails.
+Delete everything older.
 
 ---
 
 # Test Mode
 
-Every newly learned sender begins in
+Every newly learned sender starts in Test Mode.
 
-```
-Test = TRUE
-```
-
-Running AutoClean creates a dedicated review sheet like
+Running AutoClean creates a worksheet such as
 
 ```
 TEST_Row_4_costco
 ```
 
-containing
+The report shows every email:
 
-| Action | Description |
-|---------|-------------|
-| KEEP - RETENTION RULE | Newest emails |
-| KEEP - STARRED | Starred email |
-| KEEP - AUTOCLEAN KEEP LABEL | Protected email |
-| WOULD DELETE | Emails that would be removed |
+| Action | Meaning |
+|---------|---------|
+| KEEP - RETENTION RULE | Kept by retention |
+| KEEP - STARRED | Protected |
+| KEEP - AUTOCLEAN KEEP LABEL | Protected |
+| WOULD DELETE | Would be deleted |
 
-Every row also includes a direct Gmail link.
+Each row contains a direct Gmail link so you can inspect the email.
 
 Nothing is deleted while Test Mode is enabled.
 
 ---
 
-# Going Live
-
-Once you're happy with the preview:
-
-Uncheck
-
-```
-Test
-```
-
-for that sender.
-
-The next scheduled run will automatically clean that sender.
-
----
-
 # Global Dry Run
 
-The script also supports
+AutoClean also supports a global preview mode.
 
-```
-GLOBAL_DRY_RUN = true
-```
-
-When enabled
+When enabled:
 
 - Nothing is deleted
 - Every sender behaves like Test Mode
-- Great for initial setup
+- Safe for first-time setup
 
----
-
-# Gmail Labels
-
-The script automatically creates these labels if missing.
-
-```
-AutoClean/Learn
-
-AutoClean/Keep
-
-AutoClean/Ignore
-```
+This can be toggled from the spreadsheet menu.
 
 ---
 
 # Automatic Protection
 
-The following emails are **never deleted**:
+The following emails are never deleted:
 
 - ⭐ Starred emails
-- Emails with AutoClean/Keep
-- Senders marked inactive
-- Trash
-- Spam
+- 🏷 AutoClean/Keep
+- 🚫 Inactive senders
+- 🗑 Trash
+- 🚫 Spam
+
+---
+
+# Spreadsheet Menu
+
+AutoClean adds a custom menu.
+
+```
+AutoClean
+─────────────────────
+Run Cleanup
+
+Enable Auto Cleanup
+  • Every Hour
+  • Every 6 Hours
+  • Every 12 Hours
+  • Daily
+
+Disable Auto Cleanup
+
+Toggle Menu Dry Run
+
+Create Labels
+
+Open Gmail Labels
+
+Purge Empty Test Sheets
+
+Purge All Test Sheets
+
+Show Registry
+
+Refresh Settings
+
+Help
+```
+
+Most users never need to open Apps Script after installation.
+
+---
+
+# Settings Sheet
+
+AutoClean automatically maintains an **AutoCleanSettings** worksheet.
+
+It shows:
+
+- Global Dry Run status
+- Menu Dry Run status
+- Effective Dry Run
+- Automatic cleanup schedule
+- Active rules
+- Last refresh
 
 ---
 
@@ -252,7 +281,7 @@ The following emails are **never deleted**:
 
 1. Receive newsletter
 
-2. Label it
+2. Apply
 
 ```
 AutoClean/Learn
@@ -260,59 +289,106 @@ AutoClean/Learn
 
 3. Run AutoClean
 
-4. Review generated test sheet
+4. Review generated Test Sheet
 
-5. If something should always stay
+5. Protect any individual email
 
 ```
 AutoClean/Keep
 ```
 
-6. Re-run
+6. Run AutoClean again
 
-7. Uncheck Test
+7. Disable Test Mode
 
-8. Schedule automatic execution
+8. Enable automatic schedule
 
 Done.
 
 ---
 
-# Scheduling
+# Installation
 
-Create an Apps Script Trigger.
+## Step 1
 
-Recommended:
-
-Every day
-
-or
-
-Every 6 hours
+Create a new Google Spreadsheet.
 
 ---
 
-# Installation
+## Step 2
 
-1. Open Google Apps Script
+Open
 
-https://script.google.com
+```
+Extensions
+→ Apps Script
+```
 
-2. Create a new project
+---
 
-3. Paste AutoClean.gs
+## Step 3
 
-4. Save
+Paste:
 
-5. Run
+- AutoClean.gs
+- SheetMenu.gs
+
+---
+
+## Step 4
+
+Save the project.
+
+---
+
+## Step 5
+
+Run
 
 ```
 keepLatestOnly()
 ```
 
-6. Grant Gmail and Sheets permissions
+once.
 
-7. Start labeling emails
+Grant Gmail and Sheets permissions.
+
+---
+
+## Step 6
+
+Reload the spreadsheet.
+
+The AutoClean menu will appear.
+
+---
+
+## Step 7
+
+Start labeling emails.
+
+---
+
+# Scheduling
+
+Automatic schedules can be created directly from the AutoClean menu.
+
+No Apps Script trigger setup is required.
+
+Supported intervals:
+
+- Every Hour
+- Every 6 Hours
+- Every 12 Hours
+- Daily
+
+---
+
+# Requirements
+
+- Google Gmail
+- Google Sheets
+- Google Apps Script
 
 ---
 
@@ -324,6 +400,14 @@ MIT License
 
 # Disclaimer
 
-Always begin with Test Mode enabled.
+Always review Test Mode before enabling automatic deletion.
 
-Although AutoClean has safeguards (Keep label, Starred emails, preview sheets), you are responsible for reviewing cleanup rules before enabling automatic deletion.
+Although AutoClean protects:
+
+- Starred emails
+- AutoClean/Keep emails
+- Inactive senders
+- Spam
+- Trash
+
+you are ultimately responsible for reviewing your cleanup rules.
