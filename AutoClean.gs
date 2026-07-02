@@ -1,4 +1,8 @@
-const GLOBAL_DRY_RUN = true; // true = no deletion anywhere; false = live except rows with Test checked
+/***************
+ * Gmail AutoClean — Spreadsheet-Bound Version
+ ***************/
+
+const GLOBAL_DRY_RUN = false; // false = live unless row Test is checked or Menu Dry Run is ON
 
 const LEARN_LABEL_NAME = "AutoClean/Learn";
 const KEEP_LABEL_NAME = "AutoClean/Keep";
@@ -6,10 +10,15 @@ const IGNORE_LABEL_NAME = "AutoClean/Ignore";
 
 const REGISTRY_SPREADSHEET_NAME = "AutoClean Registry";
 const REGISTRY_SPREADSHEET_ID_KEY = "AUTO_CLEAN_REGISTRY_SPREADSHEET_ID";
+
 const SHEET_NAME = "AutoCleanSenders";
+const SETTINGS_SHEET_NAME = "AutoCleanSettings";
 
 const DEFAULT_MODE = "count";
 const DEFAULT_VALUE = 1;
+
+const PROP_DRY_RUN = "AUTO_CLEAN_GLOBAL_DRY_RUN";
+const PROP_SCHEDULE = "AUTO_CLEAN_SCHEDULE";
 
 const COL = {
   SENDER: 1,
@@ -24,15 +33,73 @@ const COL = {
   PROTECTED_KEPT: 10,
   TEST_SHEET: 11,
   NOTES: 12,
-  ADDED: 13
+  ADDED: 13,
+  ENABLED_SINCE: 14,
+  LAST_EMAIL_SEEN: 15
 };
+
+/***************
+ * Menu
+ ***************/
+
+function onOpen(e) {
+  SpreadsheetApp.getUi()
+    .createMenu("AutoClean")
+    .addItem("Run Cleanup", "keepLatestOnly")
+    .addSeparator()
+    .addItem("Enable Auto Cleanup: Every Hour", "enableHourlyCleanup")
+    .addItem("Enable Auto Cleanup: Every 6 Hours", "enableSixHourCleanup")
+    .addItem("Enable Auto Cleanup: Every 12 Hours", "enableTwelveHourCleanup")
+    .addItem("Enable Auto Cleanup: Daily", "enableDailyCleanup")
+    .addItem("Disable Auto Cleanup", "disableAutomaticCleanup")
+    .addSeparator()
+    .addItem("Toggle Menu Dry Run", "toggleMenuDryRun")
+    .addItem("Create Labels", "createLabelsFromMenu")
+    .addItem("Open Gmail Labels", "showGmailLabels")
+    .addItem("Purge Empty Test Sheets", "purgeEmptyTestSheets")
+    .addItem("Purge All Test Sheets", "purgeAllTestSheets")
+    .addItem("Show Registry", "showRegistry")
+    .addItem("Refresh Settings", "updateSettingsSheet")
+    .addSeparator()
+    .addItem("Help", "showHelp")
+    .addToUi();
+}
+
+function onInstall(e) {
+  onOpen(e);
+}
+
+function onEdit(e) {
+  if (!e || !e.range) return;
+
+  const sheet = e.range.getSheet();
+  if (sheet.getName() !== SHEET_NAME) return;
+
+  const row = e.range.getRow();
+  const col = e.range.getColumn();
+
+  if (row < 2 || col !== COL.ACTIVE) return;
+
+  const activeValue = e.range.getValue();
+  const enabledSinceCell = sheet.getRange(row, COL.ENABLED_SINCE);
+
+  if (activeValue === true && !enabledSinceCell.getValue()) {
+    enabledSinceCell.setValue(new Date());
+  }
+}
+
+/***************
+ * Main
+ ***************/
 
 function keepLatestOnly() {
   const ss = getRegistrySpreadsheet();
   const sheet = getOrCreateRegistrySheet();
+
   ensureHeadersAndFormatting(sheet);
   ensureLabelsExist();
-  logRegistryLink();
+
+  const globalDryRun = GLOBAL_DRY_RUN || getMenuDryRun();
 
   learnIgnoredSendersFromLabel(sheet);
   learnSendersFromLabel(sheet);
@@ -45,15 +112,23 @@ function keepLatestOnly() {
   let messagesProtectedByKeepLabel = 0;
   let messagesToTrash = 0;
 
-  Logger.log(`Active sender rules: ${rules.length}`);
+  Logger.log("==================================================");
+  Logger.log("AutoClean Run Started");
+  Logger.log(`Global constant dry run: ${GLOBAL_DRY_RUN}`);
+  Logger.log(`Menu dry run: ${getMenuDryRun()}`);
+  Logger.log(`Effective global dry run: ${globalDryRun}`);
+  Logger.log(`Active rules: ${rules.length}`);
+  Logger.log(`Registry: ${ss.getUrl()}`);
+  Logger.log("==================================================");
 
   rules.forEach(rule => {
-    const ruleDryRun = GLOBAL_DRY_RUN || rule.test;
+    const ruleDryRun = globalDryRun || rule.test;
     const query = `from:${rule.sender} -in:trash -in:spam`;
     const threads = GmailApp.search(query);
 
     const candidates = [];
     const protectedItems = [];
+    let lastEmailSeen = null;
 
     threads.forEach(thread => {
       const threadHasKeepLabel = threadHasLabel(thread, KEEP_LABEL_NAME);
@@ -66,11 +141,14 @@ function keepLatestOnly() {
         if (from !== rule.sender) return;
         if (message.isInTrash()) return;
 
+        const date = message.getDate();
+        if (!lastEmailSeen || date > lastEmailSeen) lastEmailSeen = date;
+
         const item = {
           message,
           threadId,
           gmailUrl,
-          date: message.getDate(),
+          date,
           from,
           subject: message.getSubject(),
           reason: ""
@@ -139,12 +217,21 @@ function keepLatestOnly() {
     Logger.log(`Protected kept: ${protectedItems.length}`);
     Logger.log(`Retention kept: ${retentionKeptItems.length}`);
     Logger.log(`${ruleDryRun ? "Would trash" : "Trashed"}: ${oldItems.length}`);
+    Logger.log(`Last email seen: ${lastEmailSeen ? formatDate(lastEmailSeen) : "none"}`);
 
-    oldItems.forEach(item => {
-      if (!ruleDryRun) item.message.moveToTrash();
+    allKeptItems.forEach(item => {
+      Logger.log(`[${item.reason}] ${formatDate(item.date)} | ${item.subject}`);
     });
 
-    if (rule.test || GLOBAL_DRY_RUN) {
+    oldItems.forEach(item => {
+      Logger.log(`[${item.reason}] ${formatDate(item.date)} | ${item.subject}`);
+
+      if (!ruleDryRun) {
+        item.message.moveToTrash();
+      }
+    });
+
+    if (rule.test || globalDryRun) {
       writeTestSheet(ss, sheet, rule, allKeptItems, oldItems);
     }
 
@@ -157,22 +244,28 @@ function keepLatestOnly() {
       rule.rowNumber,
       ruleDryRun ? 0 : oldItems.length,
       oldItems.length,
-      protectedItems.length
+      protectedItems.length,
+      lastEmailSeen
     );
   });
 
+  updateSettingsSheet();
+
   Logger.log("==================================================");
   Logger.log("AutoClean Summary");
-  Logger.log(`Global mode: ${GLOBAL_DRY_RUN ? "DRY RUN - nothing deleted" : "LIVE - except Test rows"}`);
-  Logger.log(`Registry sheet: ${ss.getUrl()}`);
+  Logger.log(`Effective global dry run: ${globalDryRun}`);
   Logger.log(`Active rules: ${rules.length}`);
   Logger.log(`Senders processed: ${sendersProcessed}`);
   Logger.log(`Messages found: ${messagesFound}`);
   Logger.log(`Starred kept: ${messagesSkippedStarred}`);
   Logger.log(`AutoClean/Keep protected: ${messagesProtectedByKeepLabel}`);
-  Logger.log(`Messages ${GLOBAL_DRY_RUN ? "that would be trashed" : "eligible for trash/test"}: ${messagesToTrash}`);
+  Logger.log(`Messages eligible: ${messagesToTrash}`);
   Logger.log("==================================================");
 }
+
+/***************
+ * Learn / Ignore
+ ***************/
 
 function learnSendersFromLabel(sheet) {
   const learnLabel = GmailApp.getUserLabelByName(LEARN_LABEL_NAME);
@@ -225,14 +318,7 @@ function learnIgnoredSendersFromLabel(sheet) {
         return;
       }
 
-      addSenderRow(
-        sheet,
-        sender,
-        false,
-        false,
-        "Ignored via AutoClean/Ignore"
-      );
-
+      addSenderRow(sheet, sender, false, false, "Ignored via AutoClean/Ignore");
       existing.add(sender);
       added++;
       Logger.log(`Added ignored sender: ${sender}`);
@@ -248,9 +334,10 @@ function learnIgnoredSendersFromLabel(sheet) {
 }
 
 function addSenderRow(sheet, sender, active, test, notes) {
+  const now = new Date();
   const row = getFirstEmptySenderRow(sheet);
 
-  sheet.getRange(row, 1, 1, 13).setValues([[
+  sheet.getRange(row, 1, 1, 15).setValues([[
     sender,
     DEFAULT_MODE,
     DEFAULT_VALUE,
@@ -263,11 +350,188 @@ function addSenderRow(sheet, sender, active, test, notes) {
     0,
     "",
     notes,
-    new Date()
+    now,
+    active ? now : "",
+    ""
   ]]);
 
   ensureHeadersAndFormatting(sheet);
 }
+
+/***************
+ * Registry Sheet
+ ***************/
+
+function getOrCreateRegistrySheet() {
+  const ss = getRegistrySpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_NAME);
+
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_NAME);
+  }
+
+  ensureHeadersAndFormatting(sheet);
+  return sheet;
+}
+
+function ensureHeadersAndFormatting(sheet) {
+  const headers = [
+    "Sender",
+    "Mode",
+    "Value",
+    "Active",
+    "Test",
+    "Last Cleanup",
+    "Last Removed",
+    "Total Removed",
+    "Would Delete",
+    "Protected Kept",
+    "Test Sheet",
+    "Notes",
+    "Added",
+    "Enabled Since",
+    "Last Email Seen"
+  ];
+
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  applySheetFormatting(sheet);
+}
+
+function applySheetFormatting(sheet) {
+  const maxRows = Math.max(sheet.getMaxRows(), 1000);
+
+  sheet.setFrozenRows(1);
+  sheet.getRange(1, 1, 1, 15).setFontWeight("bold");
+
+  const modeRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(["count", "days"], true)
+    .setAllowInvalid(false)
+    .build();
+
+  sheet.getRange(2, COL.MODE, maxRows - 1, 1).setDataValidation(modeRule);
+
+  sheet.getRange(2, COL.ACTIVE, maxRows - 1, 1).insertCheckboxes();
+  sheet.getRange(2, COL.TEST, maxRows - 1, 1).insertCheckboxes();
+
+  const valueRule = SpreadsheetApp.newDataValidation()
+    .requireNumberGreaterThan(0)
+    .setAllowInvalid(false)
+    .build();
+
+  sheet.getRange(2, COL.VALUE, maxRows - 1, 1).setDataValidation(valueRule);
+
+  sheet.autoResizeColumns(1, 15);
+}
+
+function getRegistrySpreadsheet() {
+  const active = SpreadsheetApp.getActiveSpreadsheet();
+
+  if (active) {
+    return active;
+  }
+
+  const props = PropertiesService.getScriptProperties();
+  let id = props.getProperty(REGISTRY_SPREADSHEET_ID_KEY);
+
+  if (id) {
+    try {
+      return SpreadsheetApp.openById(id);
+    } catch (e) {
+      props.deleteProperty(REGISTRY_SPREADSHEET_ID_KEY);
+    }
+  }
+
+  const ss = SpreadsheetApp.create(REGISTRY_SPREADSHEET_NAME);
+  props.setProperty(REGISTRY_SPREADSHEET_ID_KEY, ss.getId());
+
+  Logger.log("Created new AutoClean registry spreadsheet:");
+  Logger.log(ss.getUrl());
+
+  return ss;
+}
+
+function getFirstEmptySenderRow(sheet) {
+  const lastRow = Math.max(sheet.getLastRow(), 2);
+  const values = sheet.getRange(2, COL.SENDER, lastRow - 1, 1).getValues();
+
+  for (let i = 0; i < values.length; i++) {
+    const sender = String(values[i][0] || "").trim();
+    if (!sender) return i + 2;
+  }
+
+  return lastRow + 1;
+}
+
+function getExistingSenders(sheet) {
+  const values = sheet.getDataRange().getValues();
+  const senders = new Set();
+
+  for (let i = 1; i < values.length; i++) {
+    const sender = String(values[i][COL.SENDER - 1] || "").toLowerCase().trim();
+    if (sender) senders.add(sender);
+  }
+
+  return senders;
+}
+
+function getActiveRules(sheet) {
+  const values = sheet.getDataRange().getValues();
+  const rules = [];
+
+  for (let i = 1; i < values.length; i++) {
+    const rowNumber = i + 1;
+
+    const sender = String(values[i][COL.SENDER - 1] || "").toLowerCase().trim();
+    const mode = String(values[i][COL.MODE - 1] || DEFAULT_MODE).toLowerCase().trim();
+    const value = Number(values[i][COL.VALUE - 1] || DEFAULT_VALUE);
+    const active = values[i][COL.ACTIVE - 1];
+    const test = values[i][COL.TEST - 1];
+
+    if (!sender) continue;
+    if (active === false || String(active).toLowerCase() === "false") continue;
+
+    if (mode !== "count" && mode !== "days") {
+      Logger.log(`Skipping row ${rowNumber}: invalid mode "${mode}".`);
+      continue;
+    }
+
+    if (!value || value < 1) {
+      Logger.log(`Skipping row ${rowNumber}: invalid value "${value}".`);
+      continue;
+    }
+
+    if (!values[i][COL.ENABLED_SINCE - 1]) {
+      sheet.getRange(rowNumber, COL.ENABLED_SINCE).setValue(new Date());
+    }
+
+    rules.push({
+      rowNumber,
+      sender,
+      mode,
+      value,
+      test: test === true || String(test).toLowerCase() === "true"
+    });
+  }
+
+  return rules;
+}
+
+function updateRuleStats(sheet, rowNumber, removedCount, wouldDeleteCount, protectedKeptCount, lastEmailSeen) {
+  const now = new Date();
+  const totalCell = sheet.getRange(rowNumber, COL.TOTAL_REMOVED);
+  const currentTotal = Number(totalCell.getValue() || 0);
+
+  sheet.getRange(rowNumber, COL.LAST_CLEANUP).setValue(now);
+  sheet.getRange(rowNumber, COL.LAST_REMOVED).setValue(removedCount);
+  sheet.getRange(rowNumber, COL.WOULD_DELETE).setValue(wouldDeleteCount);
+  sheet.getRange(rowNumber, COL.PROTECTED_KEPT).setValue(protectedKeptCount);
+  sheet.getRange(rowNumber, COL.LAST_EMAIL_SEEN).setValue(lastEmailSeen || "");
+  totalCell.setValue(currentTotal + removedCount);
+}
+
+/***************
+ * Test Sheets
+ ***************/
 
 function writeTestSheet(ss, mainSheet, rule, keptItems, oldItems) {
   const testSheetName = makeTestSheetName(rule);
@@ -356,6 +620,7 @@ function applyTestSheetConditionalFormatting(sheet, rowCount) {
 
 function deleteTestSheetIfExists(ss, mainSheet, rowNumber) {
   const testSheetName = String(mainSheet.getRange(rowNumber, COL.TEST_SHEET).getValue() || "").trim();
+
   if (!testSheetName) return;
 
   const testSheet = ss.getSheetByName(testSheetName);
@@ -367,160 +632,168 @@ function deleteTestSheetIfExists(ss, mainSheet, rowNumber) {
   mainSheet.getRange(rowNumber, COL.TEST_SHEET).setValue("");
 }
 
-function makeTestSheetName(rule) {
-  const senderPart = rule.sender
-    .replace(/[^a-zA-Z0-9]/g, "_")
-    .substring(0, 40);
+function purgeEmptyTestSheets() {
+  const ss = getRegistrySpreadsheet();
+  let purged = 0;
 
-  return `TEST_Row_${rule.rowNumber}_${senderPart}`;
+  ss.getSheets().forEach(sheet => {
+    if (!sheet.getName().startsWith("TEST_Row_")) return;
+
+    if (sheet.getLastRow() <= 1) {
+      ss.deleteSheet(sheet);
+      purged++;
+    }
+  });
+
+  SpreadsheetApp.getUi().alert(`Purged ${purged} empty test sheet(s).`);
 }
 
-function getOrCreateRegistrySheet() {
+function purgeAllTestSheets() {
   const ss = getRegistrySpreadsheet();
-  let sheet = ss.getSheetByName(SHEET_NAME);
+  let purged = 0;
+
+  ss.getSheets().forEach(sheet => {
+    if (!sheet.getName().startsWith("TEST_Row_")) return;
+
+    ss.deleteSheet(sheet);
+    purged++;
+  });
+
+  const registry = getOrCreateRegistrySheet();
+  const lastRow = registry.getLastRow();
+
+  if (lastRow >= 2) {
+    registry.getRange(2, COL.TEST_SHEET, lastRow - 1, 1).clearContent();
+  }
+
+  SpreadsheetApp.getUi().alert(`Purged ${purged} test sheet(s).`);
+}
+
+/***************
+ * Settings Sheet
+ ***************/
+
+function updateSettingsSheet() {
+  const ss = getRegistrySpreadsheet();
+  let sheet = ss.getSheetByName(SETTINGS_SHEET_NAME);
 
   if (!sheet) {
-    sheet = ss.insertSheet(SHEET_NAME);
+    sheet = ss.insertSheet(SETTINGS_SHEET_NAME);
   }
 
-  ensureHeadersAndFormatting(sheet);
-  return sheet;
-}
+  const registry = getOrCreateRegistrySheet();
+  const rules = getActiveRules(registry);
 
-function ensureHeadersAndFormatting(sheet) {
-  const headers = [
-    "Sender",
-    "Mode",
-    "Value",
-    "Active",
-    "Test",
-    "Last Cleanup",
-    "Last Removed",
-    "Total Removed",
-    "Would Delete",
-    "Protected Kept",
-    "Test Sheet",
-    "Notes",
-    "Added"
-  ];
-
-  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-  applySheetFormatting(sheet);
-}
-
-function applySheetFormatting(sheet) {
-  const maxRows = Math.max(sheet.getMaxRows(), 1000);
+  sheet.clear();
+  sheet.appendRow(["Setting", "Value"]);
+  sheet.appendRow(["Global Constant Dry Run", GLOBAL_DRY_RUN]);
+  sheet.appendRow(["Menu Dry Run", getMenuDryRun()]);
+  sheet.appendRow(["Effective Dry Run", GLOBAL_DRY_RUN || getMenuDryRun()]);
+  sheet.appendRow(["Automatic Cleanup", getScheduleLabel()]);
+  sheet.appendRow(["Active Rules", rules.length]);
+  sheet.appendRow(["Last Refreshed", new Date()]);
 
   sheet.setFrozenRows(1);
-  sheet.getRange(1, 1, 1, 13).setFontWeight("bold");
-
-  const modeRule = SpreadsheetApp.newDataValidation()
-    .requireValueInList(["count", "days"], true)
-    .setAllowInvalid(false)
-    .build();
-
-  sheet.getRange(2, COL.MODE, maxRows - 1, 1).setDataValidation(modeRule);
-
-  sheet.getRange(2, COL.ACTIVE, maxRows - 1, 1).insertCheckboxes();
-  sheet.getRange(2, COL.TEST, maxRows - 1, 1).insertCheckboxes();
-
-  const valueRule = SpreadsheetApp.newDataValidation()
-    .requireNumberGreaterThan(0)
-    .setAllowInvalid(false)
-    .build();
-
-  sheet.getRange(2, COL.VALUE, maxRows - 1, 1).setDataValidation(valueRule);
-
-  sheet.autoResizeColumns(1, 13);
+  sheet.getRange(1, 1, 1, 2).setFontWeight("bold");
+  sheet.autoResizeColumns(1, 2);
 }
 
-function getRegistrySpreadsheet() {
-  const props = PropertiesService.getScriptProperties();
-  let id = props.getProperty(REGISTRY_SPREADSHEET_ID_KEY);
+function showRegistry() {
+  const ss = getRegistrySpreadsheet();
+  ss.setActiveSheet(getOrCreateRegistrySheet());
+}
 
-  if (id) {
-    try {
-      return SpreadsheetApp.openById(id);
-    } catch (e) {
-      props.deleteProperty(REGISTRY_SPREADSHEET_ID_KEY);
+/***************
+ * Triggers
+ ***************/
+
+function enableHourlyCleanup() {
+  createCleanupTrigger("hourly");
+}
+
+function enableSixHourCleanup() {
+  createCleanupTrigger("every6");
+}
+
+function enableTwelveHourCleanup() {
+  createCleanupTrigger("every12");
+}
+
+function enableDailyCleanup() {
+  createCleanupTrigger("daily");
+}
+
+function createCleanupTrigger(schedule) {
+  deleteCleanupTriggers();
+
+  let builder = ScriptApp.newTrigger("keepLatestOnly").timeBased();
+
+  if (schedule === "hourly") builder = builder.everyHours(1);
+  if (schedule === "every6") builder = builder.everyHours(6);
+  if (schedule === "every12") builder = builder.everyHours(12);
+  if (schedule === "daily") builder = builder.everyDays(1);
+
+  builder.create();
+
+  PropertiesService.getScriptProperties().setProperty(PROP_SCHEDULE, schedule);
+  updateSettingsSheet();
+
+  SpreadsheetApp.getUi().alert(`Automatic cleanup enabled: ${getScheduleLabel()}`);
+}
+
+function disableAutomaticCleanup() {
+  deleteCleanupTriggers();
+
+  PropertiesService.getScriptProperties().deleteProperty(PROP_SCHEDULE);
+  updateSettingsSheet();
+
+  SpreadsheetApp.getUi().alert("Automatic cleanup disabled.");
+}
+
+function deleteCleanupTriggers() {
+  ScriptApp.getProjectTriggers().forEach(trigger => {
+    if (trigger.getHandlerFunction() === "keepLatestOnly") {
+      ScriptApp.deleteTrigger(trigger);
     }
-  }
-
-  const ss = SpreadsheetApp.create(REGISTRY_SPREADSHEET_NAME);
-  props.setProperty(REGISTRY_SPREADSHEET_ID_KEY, ss.getId());
-
-  Logger.log("Created new AutoClean registry spreadsheet:");
-  Logger.log(ss.getUrl());
-
-  return ss;
+  });
 }
 
-function getFirstEmptySenderRow(sheet) {
-  const lastRow = Math.max(sheet.getLastRow(), 2);
-  const values = sheet.getRange(2, COL.SENDER, lastRow - 1, 1).getValues();
+function getScheduleLabel() {
+  const schedule = PropertiesService.getScriptProperties().getProperty(PROP_SCHEDULE);
 
-  for (let i = 0; i < values.length; i++) {
-    const sender = String(values[i][0] || "").trim();
-    if (!sender) return i + 2;
-  }
+  if (schedule === "hourly") return "Every hour";
+  if (schedule === "every6") return "Every 6 hours";
+  if (schedule === "every12") return "Every 12 hours";
+  if (schedule === "daily") return "Daily";
 
-  return lastRow + 1;
+  return "Disabled";
 }
 
-function getExistingSenders(sheet) {
-  const values = sheet.getDataRange().getValues();
-  const senders = new Set();
+/***************
+ * Dry Run
+ ***************/
 
-  for (let i = 1; i < values.length; i++) {
-    const sender = String(values[i][COL.SENDER - 1] || "").toLowerCase().trim();
-    if (sender) senders.add(sender);
-  }
+function getMenuDryRun() {
+  const value = PropertiesService.getScriptProperties().getProperty(PROP_DRY_RUN);
 
-  return senders;
+  if (value === null) return true;
+
+  return value === "true";
 }
 
-function getActiveRules(sheet) {
-  const values = sheet.getDataRange().getValues();
-  const rules = [];
+function toggleMenuDryRun() {
+  const current = getMenuDryRun();
 
-  for (let i = 1; i < values.length; i++) {
-    const rowNumber = i + 1;
+  PropertiesService.getScriptProperties().setProperty(PROP_DRY_RUN, String(!current));
 
-    const sender = String(values[i][COL.SENDER - 1] || "").toLowerCase().trim();
-    const mode = String(values[i][COL.MODE - 1] || DEFAULT_MODE).toLowerCase().trim();
-    const value = Number(values[i][COL.VALUE - 1] || DEFAULT_VALUE);
-    const active = values[i][COL.ACTIVE - 1];
-    const test = values[i][COL.TEST - 1];
+  updateSettingsSheet();
 
-    if (!sender) continue;
-    if (active === false || String(active).toLowerCase() === "false") continue;
-    if (mode !== "count" && mode !== "days") continue;
-    if (!value || value < 1) continue;
-
-    rules.push({
-      rowNumber,
-      sender,
-      mode,
-      value,
-      test: test === true || String(test).toLowerCase() === "true"
-    });
-  }
-
-  return rules;
+  SpreadsheetApp.getUi().alert(`Menu Dry Run is now ${!current ? "ON" : "OFF"}.`);
 }
 
-function updateRuleStats(sheet, rowNumber, removedCount, wouldDeleteCount, protectedKeptCount) {
-  const now = new Date();
-
-  const totalCell = sheet.getRange(rowNumber, COL.TOTAL_REMOVED);
-  const currentTotal = Number(totalCell.getValue() || 0);
-
-  sheet.getRange(rowNumber, COL.LAST_CLEANUP).setValue(now);
-  sheet.getRange(rowNumber, COL.LAST_REMOVED).setValue(removedCount);
-  sheet.getRange(rowNumber, COL.WOULD_DELETE).setValue(wouldDeleteCount);
-  sheet.getRange(rowNumber, COL.PROTECTED_KEPT).setValue(protectedKeptCount);
-  totalCell.setValue(currentTotal + removedCount);
-}
+/***************
+ * Labels / UI
+ ***************/
 
 function ensureLabelsExist() {
   getOrCreateLabel(LEARN_LABEL_NAME);
@@ -532,8 +805,50 @@ function getOrCreateLabel(name) {
   return GmailApp.getUserLabelByName(name) || GmailApp.createLabel(name);
 }
 
+function createLabelsFromMenu() {
+  ensureLabelsExist();
+
+  SpreadsheetApp.getUi().alert("AutoClean labels created or already exist.");
+}
+
+function showGmailLabels() {
+  const html = HtmlService.createHtmlOutput(`
+    <p><a href="https://mail.google.com/mail/u/0/#label/AutoClean%2FLearn" target="_blank">Open AutoClean/Learn</a></p>
+    <p><a href="https://mail.google.com/mail/u/0/#label/AutoClean%2FKeep" target="_blank">Open AutoClean/Keep</a></p>
+    <p><a href="https://mail.google.com/mail/u/0/#label/AutoClean%2FIgnore" target="_blank">Open AutoClean/Ignore</a></p>
+  `).setWidth(350).setHeight(180);
+
+  SpreadsheetApp.getUi().showModalDialog(html, "AutoClean Gmail Labels");
+}
+
+function showHelp() {
+  SpreadsheetApp.getUi().alert(
+    "Gmail AutoClean\n\n" +
+    "AutoClean/Learn: add sender to registry.\n" +
+    "AutoClean/Keep: protect this email/thread.\n" +
+    "AutoClean/Ignore: add sender as inactive.\n\n" +
+    "Mode=count keeps newest N emails.\n" +
+    "Mode=days keeps emails from last N days.\n\n" +
+    "Test mode creates preview sheets and deletes nothing.\n" +
+    "Menu Dry Run prevents all deletion when ON.\n" +
+    "GLOBAL_DRY_RUN in code can also force all cleanup into dry run."
+  );
+}
+
+/***************
+ * Helpers
+ ***************/
+
 function threadHasLabel(thread, labelName) {
   return thread.getLabels().some(label => label.getName() === labelName);
+}
+
+function makeTestSheetName(rule) {
+  const senderPart = rule.sender
+    .replace(/[^a-zA-Z0-9]/g, "_")
+    .substring(0, 40);
+
+  return `TEST_Row_${rule.rowNumber}_${senderPart}`;
 }
 
 function makeGmailThreadUrl(threadId) {
@@ -542,6 +857,7 @@ function makeGmailThreadUrl(threadId) {
 
 function logRegistryLink() {
   const ss = getRegistrySpreadsheet();
+
   Logger.log("Open AutoClean Registry:");
   Logger.log(ss.getUrl());
 }
@@ -552,5 +868,14 @@ function openRegistryLink() {
 
 function normalizeSender(from) {
   const match = from.match(/<(.+?)>/);
+
   return match ? match[1].toLowerCase().trim() : from.toLowerCase().trim();
+}
+
+function formatDate(date) {
+  return Utilities.formatDate(
+    date,
+    Session.getScriptTimeZone(),
+    "yyyy-MM-dd HH:mm:ss"
+  );
 }
