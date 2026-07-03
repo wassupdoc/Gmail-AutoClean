@@ -400,7 +400,7 @@ Each sender gets its own review worksheet, making it easy to approve one sender 
 Running AutoClean creates a worksheet such as
 
 ```
-TEST_Row_4_costco
+TEST_sales_e_costco_com
 ```
 
 The report shows every email:

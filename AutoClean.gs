@@ -671,6 +671,9 @@ function updateRuleStats(sheet, rowNumber, ruleDryRun, oldItemsCount, protectedK
  * Test Sheets
  ***************/
 
+const TEST_SHEET_PREFIX = "TEST_";
+const LEGACY_TEST_SHEET_PREFIX = "TEST_Row_";
+
 function writeTestSheet(ss, mainSheet, rule, keptItems, oldItems) {
   const testSheetName = makeTestSheetName(rule);
   let testSheet = ss.getSheetByName(testSheetName);
@@ -751,7 +754,7 @@ function purgeEmptyTestSheets() {
   let purged = 0;
 
   ss.getSheets().forEach(sheet => {
-    if (!sheet.getName().startsWith("TEST_Row_")) return;
+    if (!isTestSheetName(sheet.getName())) return;
 
     if (sheet.getLastRow() <= 1) {
       ss.deleteSheet(sheet);
@@ -767,7 +770,7 @@ function purgeAllTestSheets() {
   let purged = 0;
 
   ss.getSheets().forEach(sheet => {
-    if (!sheet.getName().startsWith("TEST_Row_")) return;
+    if (!isTestSheetName(sheet.getName())) return;
 
     ss.deleteSheet(sheet);
     purged++;
@@ -965,52 +968,73 @@ function showHelp() {
 function cleanupObsoleteTestSheets(sheet) {
   const ss = getRegistrySpreadsheet();
   const lastRow = sheet.getLastRow();
+  const slugsInTestMode = getTestModeSenderSlugs(sheet);
 
   let removed = 0;
-  const rowsKeepingTestSheets = new Set();
-
-  if (lastRow >= 2) {
-    for (let row = 2; row <= lastRow; row++) {
-      if (isTestModeEnabled(sheet, row)) {
-        rowsKeepingTestSheets.add(row);
-        continue;
-      }
-
-      const testSheetName = String(
-        sheet.getRange(row, COL.TEST_SHEET).getValue() || ""
-      ).trim();
-
-      if (!testSheetName) continue;
-
-      if (deleteTestSheetByName(ss, testSheetName)) {
-        removed++;
-      }
-
-      sheet.getRange(row, COL.TEST_SHEET).clearContent();
-    }
-  }
-
-  const orphanSheets = [];
+  let renamed = 0;
+  const sheetsToDelete = [];
 
   ss.getSheets().forEach(testSheet => {
     const name = testSheet.getName();
-    if (!name.startsWith("TEST_Row_")) return;
+    if (!isTestSheetName(name)) return;
 
-    const match = name.match(/^TEST_Row_(\d+)_/);
-    if (!match) return;
+    const slug = senderSlugFromTestSheetName(name);
+    if (!slug || !slugsInTestMode.has(slug)) {
+      sheetsToDelete.push(testSheet);
+      return;
+    }
 
-    const rowNumber = Number(match[1]);
-    if (rowsKeepingTestSheets.has(rowNumber)) return;
+    if (name.startsWith(LEGACY_TEST_SHEET_PREFIX)) {
+      const newName = makeTestSheetNameFromSlug(slug);
+      const existingNew = ss.getSheetByName(newName);
 
-    orphanSheets.push(testSheet);
+      if (existingNew && existingNew !== testSheet) {
+        sheetsToDelete.push(testSheet);
+      } else if (!existingNew) {
+        testSheet.setName(newName);
+        renamed++;
+      }
+    }
   });
 
-  orphanSheets.forEach(testSheet => {
+  sheetsToDelete.forEach(testSheet => {
     ss.deleteSheet(testSheet);
     removed++;
   });
 
+  if (lastRow >= 2) {
+    for (let row = 2; row <= lastRow; row++) {
+      const sender = String(sheet.getRange(row, COL.SENDER).getValue() || "").toLowerCase().trim();
+
+      if (!isTestModeEnabled(sheet, row)) {
+        sheet.getRange(row, COL.TEST_SHEET).clearContent();
+        continue;
+      }
+
+      if (sender) {
+        sheet.getRange(row, COL.TEST_SHEET).setValue(makeTestSheetNameFromSender(sender));
+      }
+    }
+  }
+
   Logger.log(`Removed ${removed} obsolete test sheet(s).`);
+  if (renamed) Logger.log(`Renamed ${renamed} legacy test sheet(s).`);
+}
+
+function getTestModeSenderSlugs(sheet) {
+  const slugs = new Set();
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow < 2) return slugs;
+
+  for (let row = 2; row <= lastRow; row++) {
+    if (!isTestModeEnabled(sheet, row)) continue;
+
+    const sender = String(sheet.getRange(row, COL.SENDER).getValue() || "").toLowerCase().trim();
+    if (sender) slugs.add(makeSenderSlug(sender));
+  }
+
+  return slugs;
 }
 
 function isTestModeEnabled(sheet, row) {
@@ -1018,12 +1042,36 @@ function isTestModeEnabled(sheet, row) {
   return value === true || String(value).toLowerCase() === "true";
 }
 
-function deleteTestSheetByName(ss, name) {
-  const testSheet = ss.getSheetByName(name);
-  if (!testSheet) return false;
+function isTestSheetName(name) {
+  return String(name).startsWith(TEST_SHEET_PREFIX);
+}
 
-  ss.deleteSheet(testSheet);
-  return true;
+function senderSlugFromTestSheetName(name) {
+  if (name.startsWith(LEGACY_TEST_SHEET_PREFIX)) {
+    const match = name.match(/^TEST_Row_\d+_(.+)$/);
+    return match ? match[1] : null;
+  }
+
+  if (name.startsWith(TEST_SHEET_PREFIX)) {
+    return name.substring(TEST_SHEET_PREFIX.length);
+  }
+
+  return null;
+}
+
+function makeSenderSlug(sender) {
+  return String(sender)
+    .toLowerCase()
+    .replace(/[^a-zA-Z0-9]/g, "_")
+    .substring(0, 40);
+}
+
+function makeTestSheetNameFromSlug(slug) {
+  return `${TEST_SHEET_PREFIX}${slug}`;
+}
+
+function makeTestSheetNameFromSender(sender) {
+  return makeTestSheetNameFromSlug(makeSenderSlug(sender));
 }
 
 function syncManagedLabels(sheet) {
@@ -1090,11 +1138,7 @@ function threadHasLabel(thread, labelName) {
 }
 
 function makeTestSheetName(rule) {
-  const senderPart = rule.sender
-    .replace(/[^a-zA-Z0-9]/g, "_")
-    .substring(0, 40);
-
-  return `TEST_Row_${rule.rowNumber}_${senderPart}`;
+  return makeTestSheetNameFromSender(rule.sender);
 }
 
 function makeGmailThreadUrl(threadId) {
