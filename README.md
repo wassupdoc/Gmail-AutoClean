@@ -122,7 +122,8 @@ AutoClean uses three Gmail labels.
 AutoClean
 ├── Learn
 ├── Keep
-└── Ignore
+├── Ignore
+└── Managed
 ```
 
 ---
@@ -193,6 +194,15 @@ Perfect for:
 - Work email
 - Schools
 - Anything accidentally added to Learn
+
+---
+# AutoClean/Managed
+
+AutoClean automatically applies this label to conversations from active managed senders.
+
+This lets you see in Gmail that a sender is already managed by AutoClean.
+
+If a sender is removed from the registry or marked inactive, AutoClean removes the Managed label on the next run.
 
 ---
 
