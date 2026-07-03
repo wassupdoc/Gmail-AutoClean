@@ -440,6 +440,27 @@ Done.
 
 # Installation
 
+## Recommended Install: Make a Copy
+
+The easiest way to install Gmail AutoClean is to make a copy of the template spreadsheet:
+
+[Make a copy of AutoClean Registry](https://docs.google.com/spreadsheets/d/1lF6n_nuEwqy8wGQCoxa9FsyDAvjaCSJ4bGuHkfdwPjk/copy)
+
+After copying:
+
+1. Open the copied spreadsheet.
+2. Reload it if needed.
+3. Use `AutoClean → Create Labels`.
+4. Use `AutoClean → Run Cleanup - Next Batch`.
+5. Approve the requested permissions.
+6. Start labeling Gmail messages with:
+   - `AutoClean/Learn`
+   - `AutoClean/Keep`
+   - `AutoClean/Ignore`
+  
+
+## Manual Install
+
 ## Step 1
 
 Create a new Google Spreadsheet.
