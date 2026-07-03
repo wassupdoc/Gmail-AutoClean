@@ -229,7 +229,6 @@ The registry updates automatically every time AutoClean runs.
 | Value | Number of emails or days |
 | Active | Enable cleanup |
 | Test | Preview only |
-| Last Cleanup | Last execution |
 | Last Checked | Last time this sender was processed |
 | Last Removed | Emails removed last run |
 | Total Removed | Lifetime deleted |

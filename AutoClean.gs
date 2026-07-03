@@ -32,19 +32,20 @@ const COL = {
   VALUE: 3,
   ACTIVE: 4,
   TEST: 5,
-  LAST_CLEANUP: 6,
-  LAST_CHECKED: 7,
-  LAST_REMOVED: 8,
-  TOTAL_REMOVED: 9,
-  WOULD_DELETE: 10,
-  PROTECTED_KEPT: 11,
-  TEST_SHEET: 12,
-  NOTES: 13,
-  ADDED: 14,
-  ENABLED_SINCE: 15,
-  LAST_EMAIL_SEEN: 16,
-  LAST_BATCH: 17
+  LAST_CHECKED: 6,
+  LAST_REMOVED: 7,
+  TOTAL_REMOVED: 8,
+  WOULD_DELETE: 9,
+  PROTECTED_KEPT: 10,
+  TEST_SHEET: 11,
+  NOTES: 12,
+  ADDED: 13,
+  ENABLED_SINCE: 14,
+  LAST_EMAIL_SEEN: 15,
+  LAST_BATCH: 16
 };
+
+const REGISTRY_COLUMN_COUNT = 16;
 
 /***************
  * Menu
@@ -515,13 +516,12 @@ function addSenderRow(sheet, sender, active, test, notes) {
   const now = new Date();
   const row = getFirstEmptySenderRow(sheet);
 
-  sheet.getRange(row, 1, 1, 17).setValues([[
+  sheet.getRange(row, 1, 1, REGISTRY_COLUMN_COUNT).setValues([[
     sender,
     DEFAULT_MODE,
     DEFAULT_VALUE,
     active,
     test,
-    "",
     "",
     0,
     0,
@@ -536,7 +536,7 @@ function addSenderRow(sheet, sender, active, test, notes) {
   ]]);
 
   applyRegistryRowFormatting(sheet, row);
-  sheet.autoResizeColumns(1, 17);
+  sheet.autoResizeColumns(1, REGISTRY_COLUMN_COUNT);
 }
 
 /***************
@@ -568,7 +568,6 @@ function getRegistryHeaders() {
     "Value",
     "Active",
     "Test",
-    "Last Cleanup",
     "Last Checked",
     "Last Removed",
     "Total Removed",
@@ -583,6 +582,15 @@ function getRegistryHeaders() {
   ];
 }
 
+function migrateRemoveLastCleanupColumn(sheet) {
+  if (sheet.getLastColumn() < 6) return;
+
+  const header = String(sheet.getRange(1, 6).getValue() || "").trim();
+  if (header === "Last Cleanup") {
+    sheet.deleteColumn(6);
+  }
+}
+
 function registryHeadersValid(sheet) {
   const expected = getRegistryHeaders();
   const lastCol = sheet.getLastColumn();
@@ -594,12 +602,14 @@ function registryHeadersValid(sheet) {
 }
 
 function ensureRegistryHeaders(sheet) {
+  migrateRemoveLastCleanupColumn(sheet);
+
   if (registryHeadersValid(sheet)) return;
 
   const headers = getRegistryHeaders();
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   sheet.setFrozenRows(1);
-  sheet.getRange(1, 1, 1, 17).setFontWeight("bold");
+  sheet.getRange(1, 1, 1, REGISTRY_COLUMN_COUNT).setFontWeight("bold");
 }
 
 function applyRegistryRowFormatting(sheet, row) {
@@ -627,7 +637,7 @@ function initializeRegistrySheet(sheet) {
     applyRegistryRowFormatting(sheet, row);
   }
 
-  sheet.autoResizeColumns(1, 17);
+  sheet.autoResizeColumns(1, REGISTRY_COLUMN_COUNT);
 }
 
 function ensureHeadersAndFormatting(sheet) {
@@ -756,7 +766,6 @@ function updateRuleStats(sheet, rowNumber, ruleDryRun, oldItemsCount, protectedK
   const totalCell = sheet.getRange(rowNumber, COL.TOTAL_REMOVED);
   const currentTotal = Number(totalCell.getValue() || 0);
 
-  sheet.getRange(rowNumber, COL.LAST_CLEANUP).setValue(now);
   sheet.getRange(rowNumber, COL.LAST_CHECKED).setValue(now);
   sheet.getRange(rowNumber, COL.LAST_REMOVED).setValue(removedCount);
   sheet.getRange(rowNumber, COL.WOULD_DELETE).setValue(wouldDeleteCount);
