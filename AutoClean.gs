@@ -70,7 +70,6 @@ function onOpen(e) {
     .addItem("Toggle Menu Dry Run", "toggleMenuDryRun")
     .addItem("Create Labels", "createLabelsFromMenu")
     .addItem("Open Gmail Labels", "showGmailLabels")
-    .addItem("Purge Empty Test Sheets", "purgeEmptyTestSheets")
     .addItem("Purge All Test Sheets", "purgeAllTestSheets")
     .addItem("Show Registry", "showRegistry")
     .addItem("Refresh Settings", "updateSettingsSheet")
@@ -275,10 +274,6 @@ function runAutoClean(runFull) {
       writeTestSheet(ss, sheet, rule, allKeptItems, oldItems);
     }
 
-    if (!ruleDryRun) {
-      deleteTestSheetIfExists(ss, sheet, rule.rowNumber);
-    }
-
     updateRuleStats(
       sheet,
       rule.rowNumber,
@@ -293,6 +288,7 @@ function runAutoClean(runFull) {
   PropertiesService.getScriptProperties().setProperty(PROP_LAST_RUN, new Date().toISOString());
   PropertiesService.getScriptProperties().setProperty(PROP_LAST_BATCH, batchLabel);
 
+  cleanupObsoleteTestSheets(sheet);
   updateSettingsSheet();
 
   Logger.log("==================================================");
@@ -970,6 +966,37 @@ function showHelp() {
  * Helpers
  ***************/
 
+
+function cleanupObsoleteTestSheets(sheet) {
+  const ss = getRegistrySpreadsheet();
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow < 2) return;
+
+  let removed = 0;
+
+  for (let row = 2; row <= lastRow; row++) {
+    const testEnabled = sheet.getRange(row, COL.TEST).getValue();
+    if (testEnabled === true) continue;
+
+    const testSheetName = String(
+      sheet.getRange(row, COL.TEST_SHEET).getValue() || ""
+    ).trim();
+
+    if (!testSheetName) continue;
+
+    const testSheet = ss.getSheetByName(testSheetName);
+
+    if (testSheet) {
+      ss.deleteSheet(testSheet);
+      removed++;
+    }
+
+    sheet.getRange(row, COL.TEST_SHEET).clearContent();
+  }
+
+  Logger.log(`Removed ${removed} obsolete test sheet(s).`);
+}
 
 function syncManagedLabels(sheet) {
   const managedLabel = getOrCreateLabel(MANAGED_LABEL_NAME);
