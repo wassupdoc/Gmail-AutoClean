@@ -217,6 +217,12 @@ Perfect for:
 - Schools
 - Anything accidentally added to Learn
 
+**Important limitations:**
+
+- **Ignore runs before Learn** on every cleanup run. If a sender is not yet in the registry, Ignore adds them as inactive before Learn can add them as active.
+- **Ignore does not undo Learn.** If cleanup already ran and Learn added an **active** row, applying Ignore later will not deactivate that sender — uncheck **Active** in the spreadsheet instead.
+- Senders **not in the registry at all** are never processed by AutoClean; Ignore is only needed when you want them recorded as blocked.
+
 ---
 # AutoClean/Managed
 
@@ -242,6 +248,10 @@ The spreadsheet is the control center.
 
 The registry updates automatically every time AutoClean runs.
 
+![AutoClean registry spreadsheet with AutoCleanSenders and AutoCleanSettings tabs](docs/registry-empty.png)
+
+*Empty registry after setup. Screenshots with populated data coming soon.*
+
 ## Columns
 
 | Column | Description |
@@ -256,7 +266,7 @@ The registry updates automatically every time AutoClean runs.
 | Total Removed | Lifetime deleted |
 | Would Delete | Preview count |
 | Protected Kept | Protected emails |
-| Test Sheet | Preview worksheet |
+| Test Sheet | Clickable link to the sender's `TEST_*` preview worksheet (set after the first test run) |
 | Notes | Optional notes |
 | Added | Rule creation date |
 | Enabled Since | Date cleanup became active |
@@ -421,13 +431,15 @@ Delete everything older.
 
 Every newly learned sender starts in Test Mode.
 
-Each sender gets its own review worksheet, making it easy to approve one sender at a time and add individual emails to keep
+Each sender gets its own review worksheet, making it easy to approve one sender at a time and protect individual emails with **AutoClean/Keep**.
 
 Running AutoClean creates a worksheet such as
 
 ```
 TEST_sales_e_costco_com
 ```
+
+The **Test Sheet** column in the registry links directly to that worksheet tab.
 
 The report shows every email:
 
@@ -457,20 +469,28 @@ Test mode requires both **Active** and **Test** to be checked.
 
 # Global Dry Run
 
-AutoClean also supports a global preview mode.
+AutoClean has three preview layers. A sender only deletes mail when **all** of the following are off/false:
 
-When enabled:
+| Layer | Where | Default |
+|-------|--------|---------|
+| **Code constant** | `GLOBAL_DRY_RUN` at the top of `AutoClean.gs` | `false` |
+| **Menu Dry Run** | `AutoClean → Turn Menu Dry Run ON/OFF` | OFF |
+| **Per-sender Test** | **Test** checkbox on each registry row | ON for newly learned senders |
 
-- Nothing is deleted
-- Every sender behaves like Test Mode
+Effective preview mode for a sender is: `GLOBAL_DRY_RUN` **or** Menu Dry Run **or** that row's **Test** checkbox.
+
+When any global preview layer is active (`GLOBAL_DRY_RUN` or Menu Dry Run):
+
+- Nothing is deleted for any sender
+- Test preview sheets are generated for processed senders
 - Safe for first-time setup
 
-This can be toggled from the spreadsheet menu.
+Menu Dry Run can be toggled from the spreadsheet without editing code.
 
-The **AutoCleanSenders** header row (row 1) changes color to show dry run status:
+The **AutoCleanSenders** header row (row 1) changes color to show global preview status:
 
-- **Green** — Menu Dry Run OFF (live deletion allowed)
-- **Orange** — Menu Dry Run ON or global dry run (preview only, nothing deleted)
+- **Green** — `GLOBAL_DRY_RUN` is `false` and Menu Dry Run is OFF (live deletion allowed for senders not in Test mode)
+- **Orange** — `GLOBAL_DRY_RUN` is `true` or Menu Dry Run is ON (preview only, nothing deleted)
 
 Reload the sheet or run cleanup after toggling to refresh the color.
 
@@ -485,6 +505,10 @@ The following emails are never deleted:
 - 🚫 Inactive senders
 - 🗑 Trash
 - 🚫 Spam
+
+## Deleted emails and recovery
+
+AutoClean moves eligible emails to **Gmail Trash** — it does not permanently erase them. You can recover trashed emails from Gmail Trash, typically for about 30 days, using Gmail's normal undo/recovery flow.
 
 ---
 
@@ -588,6 +612,10 @@ Supported intervals:
 - Every 6 Hours
 - Every 12 Hours
 - Daily
+
+## Concurrent runs
+
+Only one cleanup run executes at a time. If you start a run while another is already in progress — for example, clicking the menu during a scheduled run — AutoClean shows **"AutoClean is already running"** and skips the overlapping run. Wait for the current run to finish, then try again.
 
 ---
 
