@@ -18,8 +18,7 @@ Instead of manually deleting hundreds (or thousands) of old emails, AutoClean le
 - 🔒 Global Dry Run
 - ⭐ Never delete starred emails
 - 🏷 Never delete emails marked with **AutoClean/Keep**
-- 🚫 Ignore senders completely
-- 📊 Spreadsheet dashboard
+- 🚫 Autoclean/Ignore to ignore senders completely
 - 📈 Automatic statistics
 - 📄 Detailed test reports
 - 🔗 Direct Gmail links to every reviewed email
@@ -27,7 +26,7 @@ Instead of manually deleting hundreds (or thousands) of old emails, AutoClean le
 - 📬 Tracks the last email seen from every sender
 - ⏰ Automatic scheduled cleanup
 - 📋 Custom spreadsheet menu
-- 🚀 Automatically creates and maintains its own registry spreadsheet
+- 🚀 Automatically creates and maintains its own registry spreadsheet/dashboard
 - 🔁 Automatically batches cleanup to support hundreds of senders
 - 🧾 Last Checked tracking
 - 🧩 Last Batch tracking
@@ -118,7 +117,7 @@ If the AutoClean labels don't already exist, they will be created automatically 
 
 # Updating AutoClean
 
-If you installed AutoClean by copying the template spreadsheet, your copy will not automatically receive code updates.
+Ther is **NO** auto updates with AppScripts.  
 
 To update:
 
