@@ -448,7 +448,7 @@ function learnSendersFromLabel(sheet) {
   const learnLabel = GmailApp.getUserLabelByName(LEARN_LABEL_NAME);
   if (!learnLabel) return;
 
-  const threads = learnLabel.getThreads();
+  const threads = getAllLabelThreads(learnLabel);
   const existing = getExistingSenders(sheet);
 
   let added = 0;
@@ -483,7 +483,7 @@ function learnIgnoredSendersFromLabel(sheet) {
   const ignoreLabel = GmailApp.getUserLabelByName(IGNORE_LABEL_NAME);
   if (!ignoreLabel) return;
 
-  const threads = ignoreLabel.getThreads();
+  const threads = getAllLabelThreads(ignoreLabel);
   const existing = getExistingSenders(sheet);
 
   let added = 0;
@@ -750,6 +750,30 @@ function getActiveRules(sheet) {
   return rules;
 }
 
+function countActiveRules(sheet) {
+  const values = sheet.getDataRange().getValues();
+  let count = 0;
+  const seenSenders = new Set();
+
+  for (let i = 1; i < values.length; i++) {
+    const sender = String(values[i][COL.SENDER - 1] || "").toLowerCase().trim();
+    const mode = String(values[i][COL.MODE - 1] || DEFAULT_MODE).toLowerCase().trim();
+    const value = Number(values[i][COL.VALUE - 1] || DEFAULT_VALUE);
+    const active = values[i][COL.ACTIVE - 1];
+
+    if (!sender) continue;
+    if (active === false || String(active).toLowerCase() === "false") continue;
+    if (seenSenders.has(sender)) continue;
+    if (mode !== "count" && mode !== "days") continue;
+    if (!value || value < 1) continue;
+
+    seenSenders.add(sender);
+    count++;
+  }
+
+  return count;
+}
+
 function appendDuplicateNote(sheet, rowNumber, firstRowNumber) {
   const noteCell = sheet.getRange(rowNumber, COL.NOTES);
   const current = String(noteCell.getValue() || "").trim();
@@ -861,6 +885,7 @@ function applyTestSheetConditionalFormatting(sheet, rowCount) {
   sheet.setConditionalFormatRules([keepRule, deleteRule]);
 }
 
+// Not in the AutoClean menu (removed); kept for manual/script use — may return to menu later.
 function purgeEmptyTestSheets() {
   const ss = getRegistrySpreadsheet();
   let purged = 0;
@@ -911,7 +936,6 @@ function updateSettingsSheet() {
   }
 
   const registry = getOrCreateRegistrySheet();
-  const rules = getActiveRules(registry);
 
   sheet.clear();
   sheet.appendRow(["Setting", "Value"]);
@@ -921,7 +945,7 @@ function updateSettingsSheet() {
   sheet.appendRow(["Automatic Cleanup", getScheduleLabel()]);
   sheet.appendRow(["Batch Size", getBatchSize()]);
   sheet.appendRow(["Next Batch Index", getNextBatchIndex()]);
-  sheet.appendRow(["Active Rules", rules.length]);
+  sheet.appendRow(["Active Rules", countActiveRules(registry)]);
   sheet.appendRow(["Last Run", getPropertyOrBlank(PROP_LAST_RUN)]);
   sheet.appendRow(["Last Batch", getPropertyOrBlank(PROP_LAST_BATCH)]);
   sheet.appendRow(["Last Refreshed", new Date()]);
@@ -1325,6 +1349,24 @@ function searchAllThreads(query, pageSize = 100) {
 
   while (true) {
     const batch = GmailApp.search(query, start, pageSize);
+    if (!batch.length) break;
+
+    all.push(...batch);
+
+    if (batch.length < pageSize) break;
+
+    start += batch.length;
+  }
+
+  return all;
+}
+
+function getAllLabelThreads(label, pageSize = 100) {
+  const all = [];
+  let start = 0;
+
+  while (true) {
+    const batch = label.getThreads(start, pageSize);
     if (!batch.length) break;
 
     all.push(...batch);

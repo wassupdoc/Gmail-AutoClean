@@ -90,9 +90,9 @@ Save the project.
 
 ## Step 5
 
-Run **Initialize AutoClean** from the AutoClean menu
-or
-Run keepLatestOnly() once to initialize AutoClean.
+Run **AutoClean → Run Cleanup - Next Batch** (or **Run Full Cleanup**) once to initialize AutoClean and grant permissions.
+
+You can also run `keepLatestOnly()` once from the Apps Script editor.
 
 Grant Gmail and Sheets permissions.
 
@@ -501,6 +501,8 @@ Refresh Settings
 
 Help
 ```
+
+`purgeEmptyTestSheets()` (deletes only empty `TEST_*` sheets) exists in the script but is not in the menu — it was removed and may be added back later. Use **Purge All Test Sheets** to remove all test sheets, or run `purgeEmptyTestSheets()` from the Apps Script editor if you only want to clear empty ones.
 
 Most users never need to open Apps Script after installation.
 
