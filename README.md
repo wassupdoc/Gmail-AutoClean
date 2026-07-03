@@ -116,7 +116,7 @@ If the AutoClean labels don't already exist, they will be created automatically 
 
 # How It Works
 
-AutoClean uses three Gmail labels.
+AutoClean uses four Gmail labels.
 
 ```
 AutoClean
@@ -230,6 +230,7 @@ The registry updates automatically every time AutoClean runs.
 | Active | Enable cleanup |
 | Test | Preview only |
 | Last Cleanup | Last execution |
+| Last Checked | Last time this sender was processed |
 | Last Removed | Emails removed last run |
 | Total Removed | Lifetime deleted |
 | Would Delete | Preview count |
@@ -239,7 +240,6 @@ The registry updates automatically every time AutoClean runs.
 | Added | Rule creation date |
 | Enabled Since | Date cleanup became active |
 | Last Email Seen | Most recent email received |
-| Last Checked | Last time this sender was processed |
 | Last Batch | Batch that last processed this sender |
 
 ---
@@ -457,23 +457,25 @@ AutoClean adds a custom menu.
 ```
 AutoClean
 ─────────────────────
-Run Cleanup
+Run Cleanup - Next Batch
+Run Full Cleanup
 
-Enable Auto Cleanup
-  • Every Hour
-  • Every 6 Hours
-  • Every 12 Hours
-  • Daily
-
+Enable Auto Cleanup: Every Hour
+Enable Auto Cleanup: Every 6 Hours
+Enable Auto Cleanup: Every 12 Hours
+Enable Auto Cleanup: Daily
 Disable Auto Cleanup
+
+Set Batch Size: 25
+Set Batch Size: 50
+Set Batch Size: 100
+Reset Batch Position
 
 Toggle Menu Dry Run
 
 Create Labels
 
 Open Gmail Labels
-
-Purge Empty Test Sheets
 
 Purge All Test Sheets
 

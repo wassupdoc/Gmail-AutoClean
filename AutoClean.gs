@@ -277,7 +277,7 @@ function runAutoClean(runFull) {
     updateRuleStats(
       sheet,
       rule.rowNumber,
-      ruleDryRun ? 0 : oldItems.length,
+      ruleDryRun,
       oldItems.length,
       protectedItems.length,
       lastEmailSeen,
@@ -392,6 +392,8 @@ function resetBatchPosition() {
 
 function learnSendersFromLabel(sheet) {
   const learnLabel = GmailApp.getUserLabelByName(LEARN_LABEL_NAME);
+  if (!learnLabel) return;
+
   const threads = learnLabel.getThreads();
   const existing = getExistingSenders(sheet);
 
@@ -425,6 +427,8 @@ function learnSendersFromLabel(sheet) {
 
 function learnIgnoredSendersFromLabel(sheet) {
   const ignoreLabel = GmailApp.getUserLabelByName(IGNORE_LABEL_NAME);
+  if (!ignoreLabel) return;
+
   const threads = ignoreLabel.getThreads();
   const existing = getExistingSenders(sheet);
 
@@ -643,8 +647,12 @@ function getActiveRules(sheet) {
   return rules;
 }
 
-function updateRuleStats(sheet, rowNumber, removedCount, wouldDeleteCount, protectedKeptCount, lastEmailSeen, batchLabel) {
+function updateRuleStats(sheet, rowNumber, ruleDryRun, oldItemsCount, protectedKeptCount, lastEmailSeen, batchLabel) {
   const now = new Date();
+
+  const removedCount = ruleDryRun ? 0 : oldItemsCount;
+  const wouldDeleteCount = ruleDryRun ? oldItemsCount : 0;
+
   const totalCell = sheet.getRange(rowNumber, COL.TOTAL_REMOVED);
   const currentTotal = Number(totalCell.getValue() || 0);
 
@@ -655,6 +663,7 @@ function updateRuleStats(sheet, rowNumber, removedCount, wouldDeleteCount, prote
   sheet.getRange(rowNumber, COL.PROTECTED_KEPT).setValue(protectedKeptCount);
   sheet.getRange(rowNumber, COL.LAST_EMAIL_SEEN).setValue(lastEmailSeen || "");
   sheet.getRange(rowNumber, COL.LAST_BATCH).setValue(batchLabel || "");
+
   totalCell.setValue(currentTotal + removedCount);
 }
 
@@ -735,20 +744,6 @@ function applyTestSheetConditionalFormatting(sheet, rowCount) {
     .build();
 
   sheet.setConditionalFormatRules([keepRule, deleteRule]);
-}
-
-function deleteTestSheetIfExists(ss, mainSheet, rowNumber) {
-  const testSheetName = String(mainSheet.getRange(rowNumber, COL.TEST_SHEET).getValue() || "").trim();
-
-  if (!testSheetName) return;
-
-  const testSheet = ss.getSheetByName(testSheetName);
-
-  if (testSheet) {
-    ss.deleteSheet(testSheet);
-  }
-
-  mainSheet.getRange(rowNumber, COL.TEST_SHEET).setValue("");
 }
 
 function purgeEmptyTestSheets() {
@@ -971,31 +966,64 @@ function cleanupObsoleteTestSheets(sheet) {
   const ss = getRegistrySpreadsheet();
   const lastRow = sheet.getLastRow();
 
-  if (lastRow < 2) return;
-
   let removed = 0;
+  const rowsKeepingTestSheets = new Set();
 
-  for (let row = 2; row <= lastRow; row++) {
-    const testEnabled = sheet.getRange(row, COL.TEST).getValue();
-    if (testEnabled === true) continue;
+  if (lastRow >= 2) {
+    for (let row = 2; row <= lastRow; row++) {
+      if (isTestModeEnabled(sheet, row)) {
+        rowsKeepingTestSheets.add(row);
+        continue;
+      }
 
-    const testSheetName = String(
-      sheet.getRange(row, COL.TEST_SHEET).getValue() || ""
-    ).trim();
+      const testSheetName = String(
+        sheet.getRange(row, COL.TEST_SHEET).getValue() || ""
+      ).trim();
 
-    if (!testSheetName) continue;
+      if (!testSheetName) continue;
 
-    const testSheet = ss.getSheetByName(testSheetName);
+      if (deleteTestSheetByName(ss, testSheetName)) {
+        removed++;
+      }
 
-    if (testSheet) {
-      ss.deleteSheet(testSheet);
-      removed++;
+      sheet.getRange(row, COL.TEST_SHEET).clearContent();
     }
-
-    sheet.getRange(row, COL.TEST_SHEET).clearContent();
   }
 
+  const orphanSheets = [];
+
+  ss.getSheets().forEach(testSheet => {
+    const name = testSheet.getName();
+    if (!name.startsWith("TEST_Row_")) return;
+
+    const match = name.match(/^TEST_Row_(\d+)_/);
+    if (!match) return;
+
+    const rowNumber = Number(match[1]);
+    if (rowsKeepingTestSheets.has(rowNumber)) return;
+
+    orphanSheets.push(testSheet);
+  });
+
+  orphanSheets.forEach(testSheet => {
+    ss.deleteSheet(testSheet);
+    removed++;
+  });
+
   Logger.log(`Removed ${removed} obsolete test sheet(s).`);
+}
+
+function isTestModeEnabled(sheet, row) {
+  const value = sheet.getRange(row, COL.TEST).getValue();
+  return value === true || String(value).toLowerCase() === "true";
+}
+
+function deleteTestSheetByName(ss, name) {
+  const testSheet = ss.getSheetByName(name);
+  if (!testSheet) return false;
+
+  ss.deleteSheet(testSheet);
+  return true;
 }
 
 function syncManagedLabels(sheet) {
