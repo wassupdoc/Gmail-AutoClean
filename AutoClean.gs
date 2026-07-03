@@ -94,10 +94,16 @@ function onEdit(e) {
   if (row < 2 || col !== COL.ACTIVE) return;
 
   const activeValue = e.range.getValue();
+  const testCell = sheet.getRange(row, COL.TEST);
   const enabledSinceCell = sheet.getRange(row, COL.ENABLED_SINCE);
 
-  if (activeValue === true && !enabledSinceCell.getValue()) {
-    enabledSinceCell.setValue(new Date());
+  if (activeValue === true) {
+    testCell.setValue(true);
+    if (!enabledSinceCell.getValue()) {
+      enabledSinceCell.setValue(new Date());
+    }
+  } else if (activeValue === false) {
+    testCell.setValue(false);
   }
 }
 
@@ -118,10 +124,29 @@ function keepLatestOnlyFull() {
  ***************/
 
 function runAutoClean(runFull) {
+  const lock = LockService.getScriptLock();
+  const hasUi = !!SpreadsheetApp.getActiveSpreadsheet();
+
+  if (!lock.tryLock(30000)) {
+    Logger.log("AutoClean: another run is in progress; skipping.");
+    if (hasUi) {
+      SpreadsheetApp.getUi().alert("AutoClean is already running. Please wait for it to finish.");
+    }
+    return;
+  }
+
+  try {
+    runAutoCleanBody(runFull);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function runAutoCleanBody(runFull) {
   const ss = getRegistrySpreadsheet();
   const sheet = getOrCreateRegistrySheet();
 
-  ensureHeadersAndFormatting(sheet);
+  ensureRegistryHeaders(sheet);
   ensureLabelsExist();
   const managedLabel = getOrCreateLabel(MANAGED_LABEL_NAME);
 
@@ -158,7 +183,11 @@ function runAutoClean(runFull) {
   rules.forEach(rule => {
     const ruleDryRun = globalDryRun || rule.test;
     const query = `from:${rule.sender} -in:trash -in:spam`;
-    const threads = GmailApp.search(query);
+    const threads = searchAllThreads(query);
+
+    if (threads.length > 500) {
+      Logger.log(`Warning: ${rule.sender} returned ${threads.length} threads (pagination required).`);
+    }
 
     const candidates = [];
     const protectedItems = [];
@@ -285,6 +314,8 @@ function runAutoClean(runFull) {
     );
   });
 
+  completeBatch(batchInfo);
+
   PropertiesService.getScriptProperties().setProperty(PROP_LAST_RUN, new Date().toISOString());
   PropertiesService.getScriptProperties().setProperty(PROP_LAST_BATCH, batchLabel);
 
@@ -313,7 +344,8 @@ function runAutoClean(runFull) {
 function getFullBatch(allRules) {
   return {
     rules: allRules,
-    label: `FULL ${allRules.length} rule(s)`
+    label: `FULL ${allRules.length} rule(s)`,
+    advanceIndex: false
   };
 }
 
@@ -322,10 +354,11 @@ function getNextBatch(allRules) {
   const batchSize = getBatchSize();
 
   if (total === 0) {
-    setNextBatchIndex(0);
     return {
       rules: [],
-      label: "No active rules"
+      label: "No active rules",
+      advanceIndex: true,
+      nextIndex: 0
     };
   }
 
@@ -339,12 +372,17 @@ function getNextBatch(allRules) {
   const batchRules = allRules.slice(start, end);
   const nextIndex = end >= total ? 0 : end;
 
-  setNextBatchIndex(nextIndex);
-
   return {
     rules: batchRules,
-    label: `Rows ${batchRules.length ? batchRules[0].rowNumber : "-"}-${batchRules.length ? batchRules[batchRules.length - 1].rowNumber : "-"} (${start + 1}-${end} of ${total})`
+    label: `Rows ${batchRules.length ? batchRules[0].rowNumber : "-"}-${batchRules.length ? batchRules[batchRules.length - 1].rowNumber : "-"} (${start + 1}-${end} of ${total})`,
+    advanceIndex: true,
+    nextIndex
   };
+}
+
+function completeBatch(batchInfo) {
+  if (!batchInfo || !batchInfo.advanceIndex) return;
+  setNextBatchIndex(batchInfo.nextIndex !== undefined ? batchInfo.nextIndex : 0);
 }
 
 function getBatchSize() {
@@ -484,7 +522,8 @@ function addSenderRow(sheet, sender, active, test, notes) {
     ""
   ]]);
 
-  ensureHeadersAndFormatting(sheet);
+  applyRegistryRowFormatting(sheet, row);
+  sheet.autoResizeColumns(1, 17);
 }
 
 /***************
@@ -494,17 +533,23 @@ function addSenderRow(sheet, sender, active, test, notes) {
 function getOrCreateRegistrySheet() {
   const ss = getRegistrySpreadsheet();
   let sheet = ss.getSheetByName(SHEET_NAME);
+  const isNew = !sheet;
 
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_NAME);
   }
 
-  ensureHeadersAndFormatting(sheet);
+  ensureRegistryHeaders(sheet);
+
+  if (isNew) {
+    initializeRegistrySheet(sheet);
+  }
+
   return sheet;
 }
 
-function ensureHeadersAndFormatting(sheet) {
-  const headers = [
+function getRegistryHeaders() {
+  return [
     "Sender",
     "Mode",
     "Value",
@@ -523,35 +568,58 @@ function ensureHeadersAndFormatting(sheet) {
     "Last Email Seen",
     "Last Batch"
   ];
-
-  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-  applySheetFormatting(sheet);
 }
 
-function applySheetFormatting(sheet) {
-  const maxRows = Math.max(sheet.getMaxRows(), 1000);
+function registryHeadersValid(sheet) {
+  const expected = getRegistryHeaders();
+  const lastCol = sheet.getLastColumn();
 
+  if (lastCol < expected.length) return false;
+
+  const actual = sheet.getRange(1, 1, 1, expected.length).getValues()[0];
+  return expected.every((header, i) => String(actual[i] || "") === header);
+}
+
+function ensureRegistryHeaders(sheet) {
+  if (registryHeadersValid(sheet)) return;
+
+  const headers = getRegistryHeaders();
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   sheet.setFrozenRows(1);
   sheet.getRange(1, 1, 1, 17).setFontWeight("bold");
+}
 
+function applyRegistryRowFormatting(sheet, row) {
   const modeRule = SpreadsheetApp.newDataValidation()
     .requireValueInList(["count", "days"], true)
     .setAllowInvalid(false)
     .build();
 
-  sheet.getRange(2, COL.MODE, maxRows - 1, 1).setDataValidation(modeRule);
-
-  sheet.getRange(2, COL.ACTIVE, maxRows - 1, 1).insertCheckboxes();
-  sheet.getRange(2, COL.TEST, maxRows - 1, 1).insertCheckboxes();
+  sheet.getRange(row, COL.MODE).setDataValidation(modeRule);
+  sheet.getRange(row, COL.ACTIVE).insertCheckboxes();
+  sheet.getRange(row, COL.TEST).insertCheckboxes();
 
   const valueRule = SpreadsheetApp.newDataValidation()
     .requireNumberGreaterThan(0)
     .setAllowInvalid(false)
     .build();
 
-  sheet.getRange(2, COL.VALUE, maxRows - 1, 1).setDataValidation(valueRule);
+  sheet.getRange(row, COL.VALUE).setDataValidation(valueRule);
+}
+
+function initializeRegistrySheet(sheet) {
+  const maxRows = Math.max(sheet.getMaxRows(), 1000);
+
+  for (let row = 2; row <= maxRows - 1; row++) {
+    applyRegistryRowFormatting(sheet, row);
+  }
 
   sheet.autoResizeColumns(1, 17);
+}
+
+function ensureHeadersAndFormatting(sheet) {
+  ensureRegistryHeaders(sheet);
+  initializeRegistrySheet(sheet);
 }
 
 function getRegistrySpreadsheet() {
@@ -608,6 +676,7 @@ function getExistingSenders(sheet) {
 function getActiveRules(sheet) {
   const values = sheet.getDataRange().getValues();
   const rules = [];
+  const seenSenders = new Map();
 
   for (let i = 1; i < values.length; i++) {
     const rowNumber = i + 1;
@@ -620,6 +689,12 @@ function getActiveRules(sheet) {
 
     if (!sender) continue;
     if (active === false || String(active).toLowerCase() === "false") continue;
+
+    if (seenSenders.has(sender)) {
+      appendDuplicateNote(sheet, rowNumber, seenSenders.get(sender));
+      Logger.log(`Duplicate sender skipped: ${sender} row ${rowNumber}`);
+      continue;
+    }
 
     if (mode !== "count" && mode !== "days") {
       Logger.log(`Skipping row ${rowNumber}: invalid mode "${mode}".`);
@@ -635,6 +710,8 @@ function getActiveRules(sheet) {
       sheet.getRange(rowNumber, COL.ENABLED_SINCE).setValue(new Date());
     }
 
+    seenSenders.set(sender, rowNumber);
+
     rules.push({
       rowNumber,
       sender,
@@ -645,6 +722,16 @@ function getActiveRules(sheet) {
   }
 
   return rules;
+}
+
+function appendDuplicateNote(sheet, rowNumber, firstRowNumber) {
+  const noteCell = sheet.getRange(rowNumber, COL.NOTES);
+  const current = String(noteCell.getValue() || "").trim();
+
+  if (current.includes("Duplicate sender")) return;
+
+  const note = `Duplicate sender — using row ${firstRowNumber}`;
+  noteCell.setValue(current ? `${current} | ${note}` : note);
 }
 
 function updateRuleStats(sheet, rowNumber, ruleDryRun, oldItemsCount, protectedKeptCount, lastEmailSeen, batchLabel) {
@@ -966,6 +1053,8 @@ function showHelp() {
 
 
 function cleanupObsoleteTestSheets(sheet) {
+  syncInactiveTestCheckboxes(sheet);
+
   const ss = getRegistrySpreadsheet();
   const lastRow = sheet.getLastRow();
   const slugsInTestMode = getTestModeSenderSlugs(sheet);
@@ -1006,7 +1095,7 @@ function cleanupObsoleteTestSheets(sheet) {
     for (let row = 2; row <= lastRow; row++) {
       const sender = String(sheet.getRange(row, COL.SENDER).getValue() || "").toLowerCase().trim();
 
-      if (!isTestModeEnabled(sheet, row)) {
+      if (!isActiveRow(sheet, row) || !isTestModeEnabled(sheet, row)) {
         sheet.getRange(row, COL.TEST_SHEET).clearContent();
         continue;
       }
@@ -1028,13 +1117,30 @@ function getTestModeSenderSlugs(sheet) {
   if (lastRow < 2) return slugs;
 
   for (let row = 2; row <= lastRow; row++) {
-    if (!isTestModeEnabled(sheet, row)) continue;
+    if (!isActiveRow(sheet, row) || !isTestModeEnabled(sheet, row)) continue;
 
     const sender = String(sheet.getRange(row, COL.SENDER).getValue() || "").toLowerCase().trim();
     if (sender) slugs.add(makeSenderSlug(sender));
   }
 
   return slugs;
+}
+
+function syncInactiveTestCheckboxes(sheet) {
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow < 2) return;
+
+  for (let row = 2; row <= lastRow; row++) {
+    if (!isActiveRow(sheet, row) && isTestModeEnabled(sheet, row)) {
+      sheet.getRange(row, COL.TEST).setValue(false);
+    }
+  }
+}
+
+function isActiveRow(sheet, row) {
+  const value = sheet.getRange(row, COL.ACTIVE).getValue();
+  return value === true || String(value).toLowerCase() === "true";
 }
 
 function isTestModeEnabled(sheet, row) {
@@ -1079,7 +1185,11 @@ function syncManagedLabels(sheet) {
   const activeSenders = getActiveSenderSet(sheet);
 
   const query = `label:"${MANAGED_LABEL_NAME}" -in:trash -in:spam`;
-  const threads = GmailApp.search(query);
+  const threads = searchAllThreads(query);
+
+  if (threads.length > 500) {
+    Logger.log(`Warning: Managed label sync returned ${threads.length} threads (pagination required).`);
+  }
 
   let removed = 0;
   let kept = 0;
@@ -1139,6 +1249,24 @@ function threadHasLabel(thread, labelName) {
 
 function makeTestSheetName(rule) {
   return makeTestSheetNameFromSender(rule.sender);
+}
+
+function searchAllThreads(query, pageSize = 100) {
+  const all = [];
+  let start = 0;
+
+  while (true) {
+    const batch = GmailApp.search(query, start, pageSize);
+    if (!batch.length) break;
+
+    all.push(...batch);
+
+    if (batch.length < pageSize) break;
+
+    start += batch.length;
+  }
+
+  return all;
 }
 
 function makeGmailThreadUrl(threadId) {

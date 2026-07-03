@@ -242,6 +242,11 @@ The registry updates automatically every time AutoClean runs.
 | Last Email Seen | Most recent email received |
 | Last Batch | Batch that last processed this sender |
 
+**Registry tips:**
+
+- Do not duplicate sender rows — duplicates are skipped and noted in the **Notes** column
+- Do not delete rows — set **Active** to false instead to pause a sender
+
 ---
 
 # Batching
@@ -421,6 +426,11 @@ Test reports are color-coded:
 🔴 Red = would delete
 
 Nothing is deleted while Test Mode is enabled.
+
+Test mode requires both **Active** and **Test** to be checked.
+
+- Unchecking **Active** automatically unchecks **Test** and removes the test sheet on the next run
+- Re-checking **Active** automatically turns **Test** back on (safe default) until you manually disable it
 
 ---
 
