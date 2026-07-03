@@ -7,6 +7,7 @@ const GLOBAL_DRY_RUN = false; // false = live unless row Test is checked or Menu
 const LEARN_LABEL_NAME = "AutoClean/Learn";
 const KEEP_LABEL_NAME = "AutoClean/Keep";
 const IGNORE_LABEL_NAME = "AutoClean/Ignore";
+const MANAGED_LABEL_NAME = "AutoClean/Managed";
 
 const REGISTRY_SPREADSHEET_NAME = "AutoClean Registry";
 const REGISTRY_SPREADSHEET_ID_KEY = "AUTO_CLEAN_REGISTRY_SPREADSHEET_ID";
@@ -123,11 +124,14 @@ function runAutoClean(runFull) {
 
   ensureHeadersAndFormatting(sheet);
   ensureLabelsExist();
+  const managedLabel = getOrCreateLabel(MANAGED_LABEL_NAME);
 
   const globalDryRun = GLOBAL_DRY_RUN || getMenuDryRun();
+  
 
   learnIgnoredSendersFromLabel(sheet);
   learnSendersFromLabel(sheet);
+  syncManagedLabels(sheet);
 
   const allRules = getActiveRules(sheet);
   const batchInfo = runFull ? getFullBatch(allRules) : getNextBatch(allRules);
@@ -162,8 +166,13 @@ function runAutoClean(runFull) {
     let lastEmailSeen = null;
 
     threads.forEach(thread => {
+
+      ensureManagedLabel(thread, managedLabel);
+
       const threadHasKeepLabel = threadHasLabel(thread, KEEP_LABEL_NAME);
+
       const threadId = thread.getId();
+
       const gmailUrl = makeGmailThreadUrl(threadId);
 
       thread.getMessages().forEach(message => {
@@ -675,40 +684,16 @@ function writeTestSheet(ss, mainSheet, rule, keptItems, oldItems) {
     "Action",
     "Email Date",
     "From",
-    "Subject",
-    "Open in Gmail"
+    "Open in Gmail",
+    "Subject"
   ]);
 
   const now = new Date();
-  const rows = [];
 
-  keptItems.forEach(item => {
-    rows.push([
-      now,
-      rule.sender,
-      rule.mode,
-      rule.value,
-      item.reason,
-      item.date,
-      item.from,
-      item.subject,
-      `=HYPERLINK("${item.gmailUrl}", "Open")`
-    ]);
-  });
-
-  oldItems.forEach(item => {
-    rows.push([
-      now,
-      rule.sender,
-      rule.mode,
-      rule.value,
-      "WOULD DELETE",
-      item.date,
-      item.from,
-      item.subject,
-      `=HYPERLINK("${item.gmailUrl}", "Open")`
-    ]);
-  });
+  const rows = [
+    ...keptItems.map(item => testSheetRow(now, rule, item, item.reason)),
+    ...oldItems.map(item => testSheetRow(now, rule, item, "WOULD DELETE"))
+  ];
 
   if (rows.length > 0) {
     testSheet.getRange(2, 1, rows.length, 9).setValues(rows);
@@ -720,6 +705,20 @@ function writeTestSheet(ss, mainSheet, rule, keptItems, oldItems) {
   applyTestSheetConditionalFormatting(testSheet, rows.length);
 
   mainSheet.getRange(rule.rowNumber, COL.TEST_SHEET).setValue(testSheetName);
+}
+
+function testSheetRow(now, rule, item, action) {
+  return [
+    now,
+    rule.sender,
+    rule.mode,
+    rule.value,
+    action,
+    item.date,
+    item.from,
+    `=HYPERLINK("${item.gmailUrl}", "Open")`,
+    item.subject
+  ];
 }
 
 function applyTestSheetConditionalFormatting(sheet, rowCount) {
@@ -927,6 +926,7 @@ function ensureLabelsExist() {
   getOrCreateLabel(LEARN_LABEL_NAME);
   getOrCreateLabel(KEEP_LABEL_NAME);
   getOrCreateLabel(IGNORE_LABEL_NAME);
+  getOrCreateLabel(MANAGED_LABEL_NAME);
 }
 
 function getOrCreateLabel(name) {
@@ -944,7 +944,8 @@ function showGmailLabels() {
     <p><a href="https://mail.google.com/mail/u/0/#label/AutoClean%2FLearn" target="_blank">Open AutoClean/Learn</a></p>
     <p><a href="https://mail.google.com/mail/u/0/#label/AutoClean%2FKeep" target="_blank">Open AutoClean/Keep</a></p>
     <p><a href="https://mail.google.com/mail/u/0/#label/AutoClean%2FIgnore" target="_blank">Open AutoClean/Ignore</a></p>
-  `).setWidth(350).setHeight(180);
+    <p><a href="https://mail.google.com/mail/u/0/#label/AutoClean%2FManaged" target="_blank">Open AutoClean/Managed</a></p>
+  `).setWidth(350).setHeight(220);
 
   SpreadsheetApp.getUi().showModalDialog(html, "AutoClean Gmail Labels");
 }
@@ -955,6 +956,7 @@ function showHelp() {
     "AutoClean/Learn: add sender to registry.\n" +
     "AutoClean/Keep: protect this email/thread.\n" +
     "AutoClean/Ignore: add sender as inactive.\n\n" +
+    "AutoClean/Managed: shows messages from senders currently managed by AutoClean.\n\n" +
     "Mode=count keeps newest N emails.\n" +
     "Mode=days keeps emails from last N days.\n\n" +
     "Test mode creates preview sheets and deletes nothing.\n" +
@@ -967,6 +969,66 @@ function showHelp() {
 /***************
  * Helpers
  ***************/
+
+
+function syncManagedLabels(sheet) {
+  const managedLabel = getOrCreateLabel(MANAGED_LABEL_NAME);
+  const activeSenders = getActiveSenderSet(sheet);
+
+  const query = `label:"${MANAGED_LABEL_NAME}" -in:trash -in:spam`;
+  const threads = GmailApp.search(query);
+
+  let removed = 0;
+  let kept = 0;
+
+  threads.forEach(thread => {
+    let shouldKeepManagedLabel = false;
+
+    thread.getMessages().forEach(message => {
+      const sender = normalizeSender(message.getFrom());
+
+      if (activeSenders.has(sender)) {
+        shouldKeepManagedLabel = true;
+      }
+    });
+
+    if (shouldKeepManagedLabel) {
+      kept++;
+    } else {
+      thread.removeLabel(managedLabel);
+      removed++;
+    }
+  });
+
+  Logger.log(`Managed labels kept: ${kept}`);
+  Logger.log(`Managed labels removed: ${removed}`);
+}
+
+function getActiveSenderSet(sheet) {
+  const values = sheet.getDataRange().getValues();
+  const activeSenders = new Set();
+
+  for (let i = 1; i < values.length; i++) {
+    const sender = String(values[i][COL.SENDER - 1] || "").toLowerCase().trim();
+    const active = values[i][COL.ACTIVE - 1];
+
+    if (!sender) continue;
+    if (active === false || String(active).toLowerCase() === "false") continue;
+
+    activeSenders.add(sender);
+  }
+
+  return activeSenders;
+}
+
+function ensureManagedLabel(thread, managedLabel) {
+  if (!managedLabel) return;
+
+  if (!threadHasLabel(thread, MANAGED_LABEL_NAME)) {
+    thread.addLabel(managedLabel);
+  }
+}
+
 
 function threadHasLabel(thread, labelName) {
   return thread.getLabels().some(label => label.getName() === labelName);
