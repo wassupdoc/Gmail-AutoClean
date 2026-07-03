@@ -114,6 +114,26 @@ If the AutoClean labels don't already exist, they will be created automatically 
 
 ---
 
+# Updating AutoClean
+
+If you installed AutoClean by copying the template spreadsheet, your copy will not automatically receive code updates.
+
+To update:
+
+1. Open your AutoClean spreadsheet on desktop.
+2. Go to `Extensions → Apps Script`.
+3. Open `AutoClean.gs`.
+4. Replace the existing code with the latest `AutoClean.gs` from this repository.
+5. Save the project.
+6. Return to the spreadsheet and reload the page.
+7. Run `AutoClean → Refresh Settings`.
+
+Your sender registry and settings will remain in the spreadsheet.
+
+Longer term, the more polished approach would be a small **Updater** menu item using a library or fetching from GitHub, but that adds trust and security complexity. Manual replace-from-GitHub is the safest and clearest approach for now.
+
+---
+
 # How It Works
 
 AutoClean uses four Gmail labels.
