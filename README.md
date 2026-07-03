@@ -4,6 +4,8 @@ Automatically keep only the newest newsletters, promotional emails, journals, re
 
 Instead of manually deleting hundreds (or thousands) of old emails, AutoClean learns which senders you want to manage and automatically applies customizable retention rules.
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/S0P222IKZ9)
+
 ---
 
 # Features
@@ -597,9 +599,17 @@ Supported intervals:
 
 ---
 
+# Support
+
+If AutoClean saves you time, consider supporting the project.
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/S0P222IKZ9)
+
+---
+
 # License
 
-MIT License
+Copyright © 2026 LiVuP LLC. Gmail AutoClean is licensed under the [GNU General Public License v3.0](LICENSE) (GPL-3.0).
 
 ---
 
