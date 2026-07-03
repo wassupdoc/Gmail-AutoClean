@@ -46,6 +46,7 @@ const COL = {
 };
 
 const REGISTRY_COLUMN_COUNT = 16;
+const REGISTRY_STATUS_START_COL = REGISTRY_COLUMN_COUNT + 1;
 
 /***************
  * Menu
@@ -68,7 +69,7 @@ function onOpen(e) {
     .addItem("Set Batch Size: 100", "setBatchSize100")
     .addItem("Reset Batch Position", "resetBatchPosition")
     .addSeparator()
-    .addItem("Toggle Menu Dry Run", "toggleMenuDryRun")
+    .addItem(getMenuDryRun() ? "Turn Menu Dry Run OFF" : "Turn Menu Dry Run ON", "toggleMenuDryRun")
     .addItem("Create Labels", "createLabelsFromMenu")
     .addItem("Open Gmail Labels", "showGmailLabels")
     .addItem("Purge All Test Sheets", "purgeAllTestSheets")
@@ -77,6 +78,8 @@ function onOpen(e) {
     .addSeparator()
     .addItem("Help", "showHelp")
     .addToUi();
+
+  refreshRegistryDryRunIndicator();
 }
 
 function onInstall(e) {
@@ -926,6 +929,8 @@ function updateSettingsSheet() {
   sheet.setFrozenRows(1);
   sheet.getRange(1, 1, 1, 2).setFontWeight("bold");
   sheet.autoResizeColumns(1, 2);
+
+  updateRegistryDryRunIndicator(registry);
 }
 
 function showRegistry() {
@@ -1019,6 +1024,51 @@ function toggleMenuDryRun() {
   updateSettingsSheet();
 
   SpreadsheetApp.getUi().alert(`Menu Dry Run is now ${!current ? "ON" : "OFF"}.`);
+}
+
+function refreshRegistryDryRunIndicator() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) return;
+
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) return;
+
+  updateRegistryDryRunIndicator(sheet);
+}
+
+function updateRegistryDryRunIndicator(sheet) {
+  const menuDryRun = getMenuDryRun();
+  const effectiveDryRun = GLOBAL_DRY_RUN || menuDryRun;
+  const indicatorRange = sheet.getRange(1, REGISTRY_STATUS_START_COL, 1, REGISTRY_STATUS_START_COL + 2);
+
+  let text;
+  if (GLOBAL_DRY_RUN) {
+    text = "DRY RUN ON — preview only (code)";
+  } else if (menuDryRun) {
+    text = "MENU DRY RUN ON — preview only";
+  } else {
+    text = "Menu Dry Run: OFF";
+  }
+
+  indicatorRange.breakApart();
+  indicatorRange.merge();
+  indicatorRange.setValue(text);
+  indicatorRange.setFontWeight("bold");
+  indicatorRange.setHorizontalAlignment("center");
+  indicatorRange.setVerticalAlignment("middle");
+  indicatorRange.setWrap(true);
+
+  if (effectiveDryRun) {
+    indicatorRange.setBackground("#fce5cd");
+    indicatorRange.setFontColor("#b45309");
+  } else {
+    indicatorRange.setBackground("#d9ead3");
+    indicatorRange.setFontColor("#274e13");
+  }
+
+  sheet.setColumnWidth(REGISTRY_STATUS_START_COL, 90);
+  sheet.setColumnWidth(REGISTRY_STATUS_START_COL + 1, 90);
+  sheet.setColumnWidth(REGISTRY_STATUS_START_COL + 2, 90);
 }
 
 /***************

@@ -445,6 +445,11 @@ When enabled:
 
 This can be toggled from the spreadsheet menu.
 
+The **AutoCleanSenders** registry sheet shows the current status in the header row (columns to the right of **Last Batch**):
+
+- **Green** — Menu Dry Run OFF (live deletion allowed)
+- **Orange** — Menu Dry Run ON (preview only, nothing deleted)
+
 ---
 
 # Automatic Protection
@@ -480,7 +485,7 @@ Set Batch Size: 50
 Set Batch Size: 100
 Reset Batch Position
 
-Toggle Menu Dry Run
+Turn Menu Dry Run ON / OFF
 
 Create Labels
 
