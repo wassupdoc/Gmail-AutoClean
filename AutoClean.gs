@@ -16,9 +16,14 @@ const SETTINGS_SHEET_NAME = "AutoCleanSettings";
 
 const DEFAULT_MODE = "count";
 const DEFAULT_VALUE = 1;
+const DEFAULT_BATCH_SIZE = 50;
 
 const PROP_DRY_RUN = "AUTO_CLEAN_GLOBAL_DRY_RUN";
 const PROP_SCHEDULE = "AUTO_CLEAN_SCHEDULE";
+const PROP_BATCH_SIZE = "AUTO_CLEAN_BATCH_SIZE";
+const PROP_NEXT_BATCH_INDEX = "AUTO_CLEAN_NEXT_BATCH_INDEX";
+const PROP_LAST_RUN = "AUTO_CLEAN_LAST_RUN";
+const PROP_LAST_BATCH = "AUTO_CLEAN_LAST_BATCH";
 
 const COL = {
   SENDER: 1,
@@ -27,15 +32,17 @@ const COL = {
   ACTIVE: 4,
   TEST: 5,
   LAST_CLEANUP: 6,
-  LAST_REMOVED: 7,
-  TOTAL_REMOVED: 8,
-  WOULD_DELETE: 9,
-  PROTECTED_KEPT: 10,
-  TEST_SHEET: 11,
-  NOTES: 12,
-  ADDED: 13,
-  ENABLED_SINCE: 14,
-  LAST_EMAIL_SEEN: 15
+  LAST_CHECKED: 7,
+  LAST_REMOVED: 8,
+  TOTAL_REMOVED: 9,
+  WOULD_DELETE: 10,
+  PROTECTED_KEPT: 11,
+  TEST_SHEET: 12,
+  NOTES: 13,
+  ADDED: 14,
+  ENABLED_SINCE: 15,
+  LAST_EMAIL_SEEN: 16,
+  LAST_BATCH: 17
 };
 
 /***************
@@ -45,13 +52,19 @@ const COL = {
 function onOpen(e) {
   SpreadsheetApp.getUi()
     .createMenu("AutoClean")
-    .addItem("Run Cleanup", "keepLatestOnly")
+    .addItem("Run Cleanup - Next Batch", "keepLatestOnly")
+    .addItem("Run Full Cleanup", "keepLatestOnlyFull")
     .addSeparator()
     .addItem("Enable Auto Cleanup: Every Hour", "enableHourlyCleanup")
     .addItem("Enable Auto Cleanup: Every 6 Hours", "enableSixHourCleanup")
     .addItem("Enable Auto Cleanup: Every 12 Hours", "enableTwelveHourCleanup")
     .addItem("Enable Auto Cleanup: Daily", "enableDailyCleanup")
     .addItem("Disable Auto Cleanup", "disableAutomaticCleanup")
+    .addSeparator()
+    .addItem("Set Batch Size: 25", "setBatchSize25")
+    .addItem("Set Batch Size: 50", "setBatchSize50")
+    .addItem("Set Batch Size: 100", "setBatchSize100")
+    .addItem("Reset Batch Position", "resetBatchPosition")
     .addSeparator()
     .addItem("Toggle Menu Dry Run", "toggleMenuDryRun")
     .addItem("Create Labels", "createLabelsFromMenu")
@@ -89,10 +102,22 @@ function onEdit(e) {
 }
 
 /***************
- * Main
+ * Public Run Functions
  ***************/
 
 function keepLatestOnly() {
+  runAutoClean(false); // next batch only
+}
+
+function keepLatestOnlyFull() {
+  runAutoClean(true); // all active rules
+}
+
+/***************
+ * Main
+ ***************/
+
+function runAutoClean(runFull) {
   const ss = getRegistrySpreadsheet();
   const sheet = getOrCreateRegistrySheet();
 
@@ -104,7 +129,10 @@ function keepLatestOnly() {
   learnIgnoredSendersFromLabel(sheet);
   learnSendersFromLabel(sheet);
 
-  const rules = getActiveRules(sheet);
+  const allRules = getActiveRules(sheet);
+  const batchInfo = runFull ? getFullBatch(allRules) : getNextBatch(allRules);
+  const rules = batchInfo.rules;
+  const batchLabel = batchInfo.label;
 
   let sendersProcessed = 0;
   let messagesFound = 0;
@@ -114,10 +142,13 @@ function keepLatestOnly() {
 
   Logger.log("==================================================");
   Logger.log("AutoClean Run Started");
+  Logger.log(`Run type: ${runFull ? "FULL" : "BATCH"}`);
+  Logger.log(`Batch: ${batchLabel}`);
   Logger.log(`Global constant dry run: ${GLOBAL_DRY_RUN}`);
   Logger.log(`Menu dry run: ${getMenuDryRun()}`);
   Logger.log(`Effective global dry run: ${globalDryRun}`);
-  Logger.log(`Active rules: ${rules.length}`);
+  Logger.log(`Active rules total: ${allRules.length}`);
+  Logger.log(`Rules in this run: ${rules.length}`);
   Logger.log(`Registry: ${ss.getUrl()}`);
   Logger.log("==================================================");
 
@@ -245,22 +276,109 @@ function keepLatestOnly() {
       ruleDryRun ? 0 : oldItems.length,
       oldItems.length,
       protectedItems.length,
-      lastEmailSeen
+      lastEmailSeen,
+      batchLabel
     );
   });
+
+  PropertiesService.getScriptProperties().setProperty(PROP_LAST_RUN, new Date().toISOString());
+  PropertiesService.getScriptProperties().setProperty(PROP_LAST_BATCH, batchLabel);
 
   updateSettingsSheet();
 
   Logger.log("==================================================");
   Logger.log("AutoClean Summary");
+  Logger.log(`Run type: ${runFull ? "FULL" : "BATCH"}`);
+  Logger.log(`Batch: ${batchLabel}`);
   Logger.log(`Effective global dry run: ${globalDryRun}`);
-  Logger.log(`Active rules: ${rules.length}`);
+  Logger.log(`Active rules total: ${allRules.length}`);
+  Logger.log(`Rules processed: ${rules.length}`);
   Logger.log(`Senders processed: ${sendersProcessed}`);
   Logger.log(`Messages found: ${messagesFound}`);
   Logger.log(`Starred kept: ${messagesSkippedStarred}`);
   Logger.log(`AutoClean/Keep protected: ${messagesProtectedByKeepLabel}`);
   Logger.log(`Messages eligible: ${messagesToTrash}`);
   Logger.log("==================================================");
+}
+
+/***************
+ * Batching
+ ***************/
+
+function getFullBatch(allRules) {
+  return {
+    rules: allRules,
+    label: `FULL ${allRules.length} rule(s)`
+  };
+}
+
+function getNextBatch(allRules) {
+  const total = allRules.length;
+  const batchSize = getBatchSize();
+
+  if (total === 0) {
+    setNextBatchIndex(0);
+    return {
+      rules: [],
+      label: "No active rules"
+    };
+  }
+
+  let start = getNextBatchIndex();
+
+  if (start < 0 || start >= total) {
+    start = 0;
+  }
+
+  const end = Math.min(start + batchSize, total);
+  const batchRules = allRules.slice(start, end);
+  const nextIndex = end >= total ? 0 : end;
+
+  setNextBatchIndex(nextIndex);
+
+  return {
+    rules: batchRules,
+    label: `Rows ${batchRules.length ? batchRules[0].rowNumber : "-"}-${batchRules.length ? batchRules[batchRules.length - 1].rowNumber : "-"} (${start + 1}-${end} of ${total})`
+  };
+}
+
+function getBatchSize() {
+  const value = Number(PropertiesService.getScriptProperties().getProperty(PROP_BATCH_SIZE));
+  return value && value > 0 ? value : DEFAULT_BATCH_SIZE;
+}
+
+function setBatchSize(size) {
+  PropertiesService.getScriptProperties().setProperty(PROP_BATCH_SIZE, String(size));
+  resetBatchPosition();
+  updateSettingsSheet();
+  SpreadsheetApp.getUi().alert(`Batch size set to ${size}.`);
+}
+
+function setBatchSize25() {
+  setBatchSize(25);
+}
+
+function setBatchSize50() {
+  setBatchSize(50);
+}
+
+function setBatchSize100() {
+  setBatchSize(100);
+}
+
+function getNextBatchIndex() {
+  const value = Number(PropertiesService.getScriptProperties().getProperty(PROP_NEXT_BATCH_INDEX));
+  return value && value >= 0 ? value : 0;
+}
+
+function setNextBatchIndex(index) {
+  PropertiesService.getScriptProperties().setProperty(PROP_NEXT_BATCH_INDEX, String(index));
+}
+
+function resetBatchPosition() {
+  setNextBatchIndex(0);
+  updateSettingsSheet();
+  SpreadsheetApp.getUi().alert("Batch position reset to the beginning.");
 }
 
 /***************
@@ -337,12 +455,13 @@ function addSenderRow(sheet, sender, active, test, notes) {
   const now = new Date();
   const row = getFirstEmptySenderRow(sheet);
 
-  sheet.getRange(row, 1, 1, 15).setValues([[
+  sheet.getRange(row, 1, 1, 17).setValues([[
     sender,
     DEFAULT_MODE,
     DEFAULT_VALUE,
     active,
     test,
+    "",
     "",
     0,
     0,
@@ -352,6 +471,7 @@ function addSenderRow(sheet, sender, active, test, notes) {
     notes,
     now,
     active ? now : "",
+    "",
     ""
   ]]);
 
@@ -382,6 +502,7 @@ function ensureHeadersAndFormatting(sheet) {
     "Active",
     "Test",
     "Last Cleanup",
+    "Last Checked",
     "Last Removed",
     "Total Removed",
     "Would Delete",
@@ -390,7 +511,8 @@ function ensureHeadersAndFormatting(sheet) {
     "Notes",
     "Added",
     "Enabled Since",
-    "Last Email Seen"
+    "Last Email Seen",
+    "Last Batch"
   ];
 
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
@@ -401,7 +523,7 @@ function applySheetFormatting(sheet) {
   const maxRows = Math.max(sheet.getMaxRows(), 1000);
 
   sheet.setFrozenRows(1);
-  sheet.getRange(1, 1, 1, 15).setFontWeight("bold");
+  sheet.getRange(1, 1, 1, 17).setFontWeight("bold");
 
   const modeRule = SpreadsheetApp.newDataValidation()
     .requireValueInList(["count", "days"], true)
@@ -420,7 +542,7 @@ function applySheetFormatting(sheet) {
 
   sheet.getRange(2, COL.VALUE, maxRows - 1, 1).setDataValidation(valueRule);
 
-  sheet.autoResizeColumns(1, 15);
+  sheet.autoResizeColumns(1, 17);
 }
 
 function getRegistrySpreadsheet() {
@@ -516,16 +638,18 @@ function getActiveRules(sheet) {
   return rules;
 }
 
-function updateRuleStats(sheet, rowNumber, removedCount, wouldDeleteCount, protectedKeptCount, lastEmailSeen) {
+function updateRuleStats(sheet, rowNumber, removedCount, wouldDeleteCount, protectedKeptCount, lastEmailSeen, batchLabel) {
   const now = new Date();
   const totalCell = sheet.getRange(rowNumber, COL.TOTAL_REMOVED);
   const currentTotal = Number(totalCell.getValue() || 0);
 
   sheet.getRange(rowNumber, COL.LAST_CLEANUP).setValue(now);
+  sheet.getRange(rowNumber, COL.LAST_CHECKED).setValue(now);
   sheet.getRange(rowNumber, COL.LAST_REMOVED).setValue(removedCount);
   sheet.getRange(rowNumber, COL.WOULD_DELETE).setValue(wouldDeleteCount);
   sheet.getRange(rowNumber, COL.PROTECTED_KEPT).setValue(protectedKeptCount);
   sheet.getRange(rowNumber, COL.LAST_EMAIL_SEEN).setValue(lastEmailSeen || "");
+  sheet.getRange(rowNumber, COL.LAST_BATCH).setValue(batchLabel || "");
   totalCell.setValue(currentTotal + removedCount);
 }
 
@@ -690,7 +814,11 @@ function updateSettingsSheet() {
   sheet.appendRow(["Menu Dry Run", getMenuDryRun()]);
   sheet.appendRow(["Effective Dry Run", GLOBAL_DRY_RUN || getMenuDryRun()]);
   sheet.appendRow(["Automatic Cleanup", getScheduleLabel()]);
+  sheet.appendRow(["Batch Size", getBatchSize()]);
+  sheet.appendRow(["Next Batch Index", getNextBatchIndex()]);
   sheet.appendRow(["Active Rules", rules.length]);
+  sheet.appendRow(["Last Run", getPropertyOrBlank(PROP_LAST_RUN)]);
+  sheet.appendRow(["Last Batch", getPropertyOrBlank(PROP_LAST_BATCH)]);
   sheet.appendRow(["Last Refreshed", new Date()]);
 
   sheet.setFrozenRows(1);
@@ -776,7 +904,7 @@ function getScheduleLabel() {
 function getMenuDryRun() {
   const value = PropertiesService.getScriptProperties().getProperty(PROP_DRY_RUN);
 
-  if (value === null) return true;
+  if (value === null) return false;
 
   return value === "true";
 }
@@ -831,7 +959,8 @@ function showHelp() {
     "Mode=days keeps emails from last N days.\n\n" +
     "Test mode creates preview sheets and deletes nothing.\n" +
     "Menu Dry Run prevents all deletion when ON.\n" +
-    "GLOBAL_DRY_RUN in code can also force all cleanup into dry run."
+    "Batching processes only part of your sender list each scheduled run.\n" +
+    "Use Run Full Cleanup if you want to process all active senders at once."
   );
 }
 
@@ -878,4 +1007,8 @@ function formatDate(date) {
     Session.getScriptTimeZone(),
     "yyyy-MM-dd HH:mm:ss"
   );
+}
+
+function getPropertyOrBlank(key) {
+  return PropertiesService.getScriptProperties().getProperty(key) || "";
 }
