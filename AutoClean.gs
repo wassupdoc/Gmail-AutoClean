@@ -848,7 +848,25 @@ function writeTestSheet(ss, mainSheet, rule, keptItems, oldItems) {
   testSheet.autoResizeColumns(1, 9);
   applyTestSheetConditionalFormatting(testSheet, rows.length);
 
-  mainSheet.getRange(rule.rowNumber, COL.TEST_SHEET).setValue(testSheetName);
+  setRegistryTestSheetLink(mainSheet, rule.rowNumber, ss, testSheetName);
+}
+
+function setRegistryTestSheetLink(mainSheet, rowNumber, ss, testSheetName) {
+  const cell = mainSheet.getRange(rowNumber, COL.TEST_SHEET);
+  const testSheet = ss.getSheetByName(testSheetName);
+
+  if (!testSheet) {
+    cell.setValue(testSheetName);
+    return;
+  }
+
+  const gid = testSheet.getSheetId();
+  const label = escapeFormulaString(testSheetName);
+  cell.setFormula(`=HYPERLINK("#gid=${gid}", "${label}")`);
+}
+
+function escapeFormulaString(value) {
+  return String(value).replace(/"/g, '""');
 }
 
 function testSheetRow(now, rule, item, action) {
@@ -1193,7 +1211,7 @@ function cleanupObsoleteTestSheets(sheet) {
       }
 
       if (sender) {
-        sheet.getRange(row, COL.TEST_SHEET).setValue(makeTestSheetNameFromSender(sender));
+        setRegistryTestSheetLink(sheet, row, ss, makeTestSheetNameFromSender(sender));
       }
     }
   }
