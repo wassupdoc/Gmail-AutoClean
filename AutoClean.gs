@@ -93,18 +93,31 @@ function onEdit(e) {
 
   if (row < 2 || col !== COL.ACTIVE) return;
 
-  const activeValue = e.range.getValue();
+  const activeValue = getCheckboxEditValue(e);
   const testCell = sheet.getRange(row, COL.TEST);
   const enabledSinceCell = sheet.getRange(row, COL.ENABLED_SINCE);
 
-  if (activeValue === true) {
-    testCell.setValue(true);
+  if (activeValue) {
+    setCheckboxValue(testCell, true);
     if (!enabledSinceCell.getValue()) {
       enabledSinceCell.setValue(new Date());
     }
-  } else if (activeValue === false) {
-    testCell.setValue(false);
+  } else {
+    setCheckboxValue(testCell, false);
   }
+}
+
+function getCheckboxEditValue(e) {
+  if (e.value === "TRUE") return true;
+  if (e.value === "FALSE") return false;
+
+  const value = e.range.getValue();
+  return value === true || String(value).toLowerCase() === "true";
+}
+
+function setCheckboxValue(cell, checked) {
+  cell.insertCheckboxes();
+  cell.setValue(checked);
 }
 
 /***************
