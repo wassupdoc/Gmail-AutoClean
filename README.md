@@ -25,11 +25,92 @@ Instead of manually deleting hundreds (or thousands) of old emails, AutoClean le
 - 📬 Tracks the last email seen from every sender
 - ⏰ Automatic scheduled cleanup
 - 📋 Custom spreadsheet menu
-- 🎯 Zero manual spreadsheet setup
-- 🔁 Batched cleanup for large sender lists
+- 🚀 Automatically creates and maintains its own registry spreadsheet
+- 🔁 Automatically batches cleanup to support hundreds of senders
 - 🧾 Last Checked tracking
 - 🧩 Last Batch tracking
 - ⚡ Manual full cleanup option
+- ♻️ Cleans existing inbox history, not just future emails
+
+---
+
+# Installation
+
+## Recommended Install: Make a Copy
+
+The easiest way to install Gmail AutoClean is to make a copy of the template spreadsheet:
+
+[Make a copy of AutoClean Registry](https://docs.google.com/spreadsheets/d/1lF6n_nuEwqy8wGQCoxa9FsyDAvjaCSJ4bGuHkfdwPjk/copy)
+
+After copying:
+
+1. Open the copied spreadsheet.
+2. Reload it if needed.
+3. Use `AutoClean → Create Labels`.
+4. Use `AutoClean → Run Cleanup - Next Batch`.
+5. Approve the requested permissions.
+6. Start labeling Gmail messages with:
+   - `AutoClean/Learn`
+   - `AutoClean/Keep`
+   - `AutoClean/Ignore`
+  
+
+## Manual Install
+
+## Step 1
+
+Create a new Google Spreadsheet.
+
+---
+
+## Step 2
+
+Open
+
+```
+Extensions
+→ Apps Script
+```
+
+---
+
+## Step 3
+
+Paste:
+
+- AutoClean.gs
+
+---
+
+## Step 4
+
+Save the project.
+
+---
+
+## Step 5
+
+Run **Initialize AutoClean** from the AutoClean menu
+or
+Run keepLatestOnly() once to initialize AutoClean.
+
+Grant Gmail and Sheets permissions.
+
+---
+
+## Step 6
+
+Reload the spreadsheet.
+
+The AutoClean menu will automatically appear in the toolbar.
+
+---
+
+## Step 7
+
+Start labeling emails.
+
+If the AutoClean labels don't already exist, they will be created automatically the first time the script runs.
 
 ---
 
@@ -60,7 +141,7 @@ Run AutoClean.
 
 The sender is automatically added to the registry.
 
-The Learn label is automatically removed.
+The Learn label is automatically removed because it is only used to teach AutoClean about a new sender once.
 
 Every new sender starts with:
 
@@ -102,6 +183,8 @@ Active = FALSE
 
 AutoClean will never process that sender unless you later enable it manually.
 
+The Ignore label is removed after the sender has been added to the registry as inactive.
+
 Perfect for:
 
 - Friends
@@ -113,7 +196,7 @@ Perfect for:
 
 ---
 
-# Registry Spreadsheet
+# Registry Dashboard/Spreadsheet
 
 The first run automatically creates:
 
@@ -302,6 +385,8 @@ Delete everything older.
 
 Every newly learned sender starts in Test Mode.
 
+Each sender gets its own review worksheet, making it easy to approve one sender at a time and add individual emails to keep
+
 Running AutoClean creates a worksheet such as
 
 ```
@@ -438,85 +523,6 @@ Done.
 
 ---
 
-# Installation
-
-## Recommended Install: Make a Copy
-
-The easiest way to install Gmail AutoClean is to make a copy of the template spreadsheet:
-
-[Make a copy of AutoClean Registry](https://docs.google.com/spreadsheets/d/1lF6n_nuEwqy8wGQCoxa9FsyDAvjaCSJ4bGuHkfdwPjk/copy)
-
-After copying:
-
-1. Open the copied spreadsheet.
-2. Reload it if needed.
-3. Use `AutoClean → Create Labels`.
-4. Use `AutoClean → Run Cleanup - Next Batch`.
-5. Approve the requested permissions.
-6. Start labeling Gmail messages with:
-   - `AutoClean/Learn`
-   - `AutoClean/Keep`
-   - `AutoClean/Ignore`
-  
-
-## Manual Install
-
-## Step 1
-
-Create a new Google Spreadsheet.
-
----
-
-## Step 2
-
-Open
-
-```
-Extensions
-→ Apps Script
-```
-
----
-
-## Step 3
-
-Paste:
-
-- AutoClean.gs
-
----
-
-## Step 4
-
-Save the project.
-
----
-
-## Step 5
-
-Run **Initialize AutoClean** from the AutoClean menu
-or
-Run keepLatestOnly() once to initialize AutoClean.
-
-Grant Gmail and Sheets permissions.
-
----
-
-## Step 6
-
-Reload the spreadsheet.
-
-The AutoClean menu will automatically appear in the toolbar.
-
----
-
-## Step 7
-
-Start labeling emails.
-
-If the AutoClean labels don't already exist, they will be created automatically the first time the script runs.
-
----
 
 # Scheduling
 
@@ -562,4 +568,5 @@ The following emails are never deleted:
 - 🗑 Emails already in Trash
 - 🚫 Emails in Spam
 
-you are ultimately responsible for reviewing your cleanup rules.
+
+AutoClean has been designed with multiple safeguards—including Test Mode, protected labels, starred email protection, and preview reports—but you should always review your cleanup rules before enabling automatic deletion.
