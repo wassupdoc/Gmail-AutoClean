@@ -445,10 +445,12 @@ When enabled:
 
 This can be toggled from the spreadsheet menu.
 
-The **AutoCleanSenders** registry sheet shows the current status in the header row (columns to the right of **Last Batch**):
+The **AutoCleanSenders** header row (row 1) changes color to show dry run status:
 
 - **Green** — Menu Dry Run OFF (live deletion allowed)
-- **Orange** — Menu Dry Run ON (preview only, nothing deleted)
+- **Orange** — Menu Dry Run ON or global dry run (preview only, nothing deleted)
+
+Reload the sheet or run cleanup after toggling to refresh the color.
 
 ---
 

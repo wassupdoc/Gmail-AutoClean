@@ -46,7 +46,6 @@ const COL = {
 };
 
 const REGISTRY_COLUMN_COUNT = 16;
-const REGISTRY_STATUS_START_COL = REGISTRY_COLUMN_COUNT + 1;
 
 /***************
  * Menu
@@ -561,6 +560,7 @@ function getOrCreateRegistrySheet() {
     initializeRegistrySheet(sheet);
   }
 
+  updateRegistryDryRunIndicator(sheet);
   return sheet;
 }
 
@@ -1039,36 +1039,32 @@ function refreshRegistryDryRunIndicator() {
 function updateRegistryDryRunIndicator(sheet) {
   const menuDryRun = getMenuDryRun();
   const effectiveDryRun = GLOBAL_DRY_RUN || menuDryRun;
-  const indicatorRange = sheet.getRange(1, REGISTRY_STATUS_START_COL, 1, REGISTRY_STATUS_START_COL + 2);
+  const lastCol = sheet.getLastColumn();
 
-  let text;
-  if (GLOBAL_DRY_RUN) {
-    text = "DRY RUN ON — preview only (code)";
-  } else if (menuDryRun) {
-    text = "MENU DRY RUN ON — preview only";
-  } else {
-    text = "Menu Dry Run: OFF";
+  if (lastCol > REGISTRY_COLUMN_COUNT) {
+    const extraColCount = lastCol - REGISTRY_COLUMN_COUNT;
+    const extraRange = sheet.getRange(1, REGISTRY_COLUMN_COUNT + 1, 1, extraColCount);
+
+    extraRange.breakApart();
+    extraRange.clearContent();
+    extraRange.setBackground(null);
+    extraRange.setFontColor(null);
+    extraRange.setFontWeight("normal");
   }
 
-  indicatorRange.breakApart();
-  indicatorRange.merge();
-  indicatorRange.setValue(text);
-  indicatorRange.setFontWeight("bold");
-  indicatorRange.setHorizontalAlignment("center");
-  indicatorRange.setVerticalAlignment("middle");
-  indicatorRange.setWrap(true);
+  const headerRange = sheet.getRange(1, 1, 1, REGISTRY_COLUMN_COUNT);
+
+  headerRange.breakApart();
 
   if (effectiveDryRun) {
-    indicatorRange.setBackground("#fce5cd");
-    indicatorRange.setFontColor("#b45309");
+    headerRange.setBackground("#fce5cd");
+    headerRange.setFontColor("#7f4f00");
   } else {
-    indicatorRange.setBackground("#d9ead3");
-    indicatorRange.setFontColor("#274e13");
+    headerRange.setBackground("#d9ead3");
+    headerRange.setFontColor("#274e13");
   }
 
-  sheet.setColumnWidth(REGISTRY_STATUS_START_COL, 90);
-  sheet.setColumnWidth(REGISTRY_STATUS_START_COL + 1, 90);
-  sheet.setColumnWidth(REGISTRY_STATUS_START_COL + 2, 90);
+  headerRange.setFontWeight("bold");
 }
 
 /***************
