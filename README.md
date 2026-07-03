@@ -26,6 +26,10 @@ Instead of manually deleting hundreds (or thousands) of old emails, AutoClean le
 - ⏰ Automatic scheduled cleanup
 - 📋 Custom spreadsheet menu
 - 🎯 Zero manual spreadsheet setup
+- 🔁 Batched cleanup for large sender lists
+- 🧾 Last Checked tracking
+- 🧩 Last Batch tracking
+- ⚡ Manual full cleanup option
 
 ---
 
@@ -121,6 +125,8 @@ No manual setup required.
 
 The spreadsheet is the control center.
 
+The registry updates automatically every time AutoClean runs.
+
 ## Columns
 
 | Column | Description |
@@ -140,6 +146,125 @@ The spreadsheet is the control center.
 | Added | Rule creation date |
 | Enabled Since | Date cleanup became active |
 | Last Email Seen | Most recent email received |
+| Last Checked | Last time this sender was processed |
+| Last Batch | Batch that last processed this sender |
+
+---
+
+# Batching
+
+AutoClean processes senders in batches so large registries do not hit Google Apps Script runtime limits.
+
+Even senders with hundreds or thousands of emails are processed efficiently because AutoClean searches one sender at a time rather than loading your entire mailbox.
+
+By default, scheduled cleanup processes the **next batch** of senders, not the entire registry.
+
+Default batch size:
+
+```text
+50 senders
+```
+
+---
+
+## Why Batching Exists
+
+If you manage hundreds of senders, processing every sender in one run can take too long.
+
+Batching lets AutoClean process a smaller group each time.
+
+Example:
+
+```text
+Run 1: senders 1–50
+Run 2: senders 51–100
+Run 3: senders 101–150
+Run 4: starts over at sender 1
+```
+
+---
+
+## Menu Options
+
+From the AutoClean menu:
+
+```text
+Run Cleanup - Next Batch
+Run Full Cleanup
+
+Set Batch Size: 25
+Set Batch Size: 50
+Set Batch Size: 100
+
+Reset Batch Position
+```
+
+---
+
+## Scheduled Cleanup
+
+Scheduled cleanup uses:
+
+```text
+Run Cleanup - Next Batch
+```
+
+This means every scheduled run continues where the previous run stopped.
+
+---
+
+## Full Cleanup
+
+Use:
+
+```text
+AutoClean → Run Full Cleanup
+```
+
+to process all active senders immediately.
+
+This is useful for:
+
+- Small registries
+- Manual maintenance
+- Testing
+- First-time cleanup
+
+---
+
+## Batch Tracking
+
+AutoClean tracks batching in the spreadsheet.
+
+| Column | Description |
+|---|---|
+| Last Checked | Last time that sender was processed |
+| Last Batch | Batch that last processed that sender |
+
+The Settings sheet also tracks:
+
+| Setting | Description |
+|---|---|
+| Batch Size | Current number of senders per batch |
+| Next Batch Index | Where the next scheduled batch starts |
+| Last Run | Last AutoClean execution |
+| Last Batch | Last processed batch |
+
+---
+
+## Recommended Batch Size
+
+| Registry Size | Recommended Batch Size |
+|---:|---:|
+| 1–100 senders | 50 or 100 |
+| 100–500 senders | 50 |
+| 500+ senders | 25 or 50 |
+
+Most users should start with:
+
+```text
+50
+```
 
 ---
 
@@ -193,6 +318,12 @@ The report shows every email:
 | WOULD DELETE | Would be deleted |
 
 Each row contains a direct Gmail link so you can inspect the email.
+
+Test reports are color-coded:
+
+🟢 Green = kept
+
+🔴 Red = would delete
 
 Nothing is deleted while Test Mode is enabled.
 
@@ -331,7 +462,6 @@ Extensions
 Paste:
 
 - AutoClean.gs
-- SheetMenu.gs
 
 ---
 
@@ -343,13 +473,9 @@ Save the project.
 
 ## Step 5
 
-Run
-
-```
-keepLatestOnly()
-```
-
-once.
+Run **Initialize AutoClean** from the AutoClean menu
+or
+Run keepLatestOnly() once to initialize AutoClean.
 
 Grant Gmail and Sheets permissions.
 
@@ -359,13 +485,15 @@ Grant Gmail and Sheets permissions.
 
 Reload the spreadsheet.
 
-The AutoClean menu will appear.
+The AutoClean menu will automatically appear in the toolbar.
 
 ---
 
 ## Step 7
 
 Start labeling emails.
+
+If the AutoClean labels don't already exist, they will be created automatically the first time the script runs.
 
 ---
 
@@ -404,10 +532,13 @@ Always review Test Mode before enabling automatic deletion.
 
 Although AutoClean protects:
 
-- Starred emails
-- AutoClean/Keep emails
-- Inactive senders
-- Spam
-- Trash
+The following emails are never deleted:
+
+- ⭐ Starred emails
+- 🏷 Emails or threads labeled AutoClean/Keep
+- 🚫 Senders marked inactive
+- 🚫 Senders learned through AutoClean/Ignore
+- 🗑 Emails already in Trash
+- 🚫 Emails in Spam
 
 you are ultimately responsible for reviewing your cleanup rules.
