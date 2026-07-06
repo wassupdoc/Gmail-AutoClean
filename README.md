@@ -127,7 +127,7 @@ To update:
 4. Replace the existing code with the latest `AutoClean.gs` from this repository.
 5. Save the project.
 6. Return to the spreadsheet and reload the page.
-7. Run `AutoClean → Refresh Settings`.
+7. Run `AutoClean → View Settings`.
 
 Your sender registry and settings will remain in the spreadsheet.
 
@@ -260,7 +260,7 @@ The spreadsheet is the control center.
 
 The registry updates automatically every time AutoClean runs.
 
-![AutoClean registry spreadsheet with AutoCleanSenders and AutoCleanSettings tabs](docs/registry-empty.png)
+![AutoClean registry spreadsheet with AutoCleanSenders tab](docs/registry-empty.png)
 
 *Empty registry after setup. Screenshots with populated data coming soon.*
 
@@ -290,7 +290,7 @@ The registry updates automatically every time AutoClean runs.
 
 - Do not duplicate sender rows — duplicates are skipped and noted in the **Notes** column
 - Do not delete rows — set **Active** to false instead to pause a sender
-- Use **AutoClean → Verify Registry Layout** to check headers, column formats, and row validations
+- Use **AutoClean → Verify/Fix Registry** to check headers, column formats, row validations, and Gmail Search links
 
 ---
 
@@ -483,17 +483,18 @@ Test mode requires both **Active** and **Test** to be checked.
 
 # Global Dry Run
 
-AutoClean has three preview layers. A sender only deletes mail when **all** of the following are off/false:
+AutoClean has two user-facing preview controls plus an optional developer switch in code.
+
+## Menu Dry Run and Test mode
+
+Mail is only deleted when **both** global preview layers are off and the sender row is not in **Test** mode:
 
 | Layer | Where | Default |
 |-------|--------|---------|
-| **Code constant** | `GLOBAL_DRY_RUN` at the top of `AutoClean.gs` | `false` |
 | **Menu Dry Run** | `AutoClean → Turn Menu Dry Run ON/OFF` | OFF |
 | **Per-sender Test** | **Test** checkbox on each registry row | ON for newly learned senders |
 
-Effective preview mode for a sender is: `GLOBAL_DRY_RUN` **or** Menu Dry Run **or** that row's **Test** checkbox.
-
-When any global preview layer is active (`GLOBAL_DRY_RUN` or Menu Dry Run):
+When **Menu Dry Run** is ON:
 
 - Nothing is deleted for any sender
 - Test preview sheets are generated for processed senders
@@ -501,12 +502,28 @@ When any global preview layer is active (`GLOBAL_DRY_RUN` or Menu Dry Run):
 
 Menu Dry Run can be toggled from the spreadsheet without editing code.
 
-The **AutoCleanSenders** header row (row 1) changes color to show global preview status:
+The **AutoCleanSenders** header row (row 1) changes color to show preview status:
 
-- **Green** — `GLOBAL_DRY_RUN` is `false` and Menu Dry Run is OFF (live deletion allowed for senders not in Test mode)
-- **Orange** — `GLOBAL_DRY_RUN` is `true` or Menu Dry Run is ON (preview only, nothing deleted)
+- **Green** — Menu Dry Run is OFF and live deletion is allowed for senders not in Test mode
+- **Orange** — Menu Dry Run is ON, or the developer constant below is enabled (preview only, nothing deleted)
 
 Reload the sheet or run cleanup after toggling to refresh the color.
+
+## Developer constant (`GLOBAL_DRY_RUN`)
+
+For power users and template authors, `GLOBAL_DRY_RUN` at the top of `AutoClean.gs` is a code-level safety switch. It is **not shown** in the settings dialog or menu.
+
+```javascript
+const GLOBAL_DRY_RUN = false;
+```
+
+When set to `true`:
+
+- Nothing is deleted, even if Menu Dry Run is OFF
+- The registry header turns orange (same as Menu Dry Run ON)
+- Useful for distributing a safe-by-default copy, or as a belt-and-suspenders guard until you deliberately edit the script
+
+Effective global preview is: `GLOBAL_DRY_RUN` **or** Menu Dry Run. Per-sender **Test** mode is separate and applies on top of that.
 
 ---
 
@@ -557,9 +574,9 @@ Purge All Test Sheets
 
 Show Registry
 
-Refresh Settings
+View Settings
 
-Verify Registry Layout
+Verify/Fix Registry
 
 Help
 ```
@@ -570,18 +587,18 @@ Most users never need to open Apps Script after installation.
 
 ---
 
-# Settings Sheet
+# Settings
 
-AutoClean automatically maintains an **AutoCleanSettings** worksheet.
+Use **AutoClean → View Settings** to open a read-only dashboard showing:
 
-It shows:
-
-- Global Dry Run status
-- Menu Dry Run status
-- Effective Dry Run
+- Script version
+- Menu dry run status
 - Automatic cleanup schedule
-- Active rules
-- Last refresh
+- Batch size and next batch index
+- Active rules count
+- Last run and last batch
+
+Values are read live from script properties each time you open the dialog. The old **AutoCleanSettings** worksheet is removed automatically when you use View Settings.
 
 ---
 

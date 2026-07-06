@@ -20,9 +20,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  ***************/
 
-const SCRIPT_VERSION = "20260706-1";
+const SCRIPT_VERSION = "20260706-5";
+const SCRIPT_REPOSITORY_URL = "https://github.com/wassupdoc/Gmail-AutoClean";
 
-const GLOBAL_DRY_RUN = false; // false = live unless row Test is checked or Menu Dry Run is ON
+const GLOBAL_DRY_RUN = false; // Developer-only safety switch; not shown in the UI (use Menu Dry Run)
 
 const LEARN_LABEL_NAME = "AutoClean/Learn";
 const KEEP_LABEL_NAME = "AutoClean/Keep";
@@ -74,34 +75,63 @@ const REGISTRY_COLUMN_COUNT = 17;
  ***************/
 
 function onOpen(e) {
+  buildAutoCleanMenu();
+  refreshRegistryDryRunIndicator();
+  removeLegacySettingsSheet();
+}
+
+function buildAutoCleanMenu() {
   SpreadsheetApp.getUi()
     .createMenu("AutoClean")
     .addItem("Run Cleanup - Next Batch", "keepLatestOnly")
     .addItem("Run Full Cleanup", "keepLatestOnlyFull")
     .addSeparator()
-    .addItem("Enable Auto Cleanup: Every Hour", "enableHourlyCleanup")
-    .addItem("Enable Auto Cleanup: Every 6 Hours", "enableSixHourCleanup")
-    .addItem("Enable Auto Cleanup: Every 12 Hours", "enableTwelveHourCleanup")
-    .addItem("Enable Auto Cleanup: Daily", "enableDailyCleanup")
-    .addItem("Disable Auto Cleanup", "disableAutomaticCleanup")
+    .addItem(getMenuDryRun() ? "Turn Menu Dry Run OFF" : "Turn Menu Dry Run ON", "toggleMenuDryRun")
     .addSeparator()
-    .addItem("Set Batch Size: 25", "setBatchSize25")
-    .addItem("Set Batch Size: 50", "setBatchSize50")
-    .addItem("Set Batch Size: 100", "setBatchSize100")
+    .addItem(getScheduleMenuLabel("hourly", "Every Hour"), "enableHourlyCleanup")
+    .addItem(getScheduleMenuLabel("every6", "Every 6 Hours"), "enableSixHourCleanup")
+    .addItem(getScheduleMenuLabel("every12", "Every 12 Hours"), "enableTwelveHourCleanup")
+    .addItem(getScheduleMenuLabel("daily", "Daily"), "enableDailyCleanup")
+    .addItem(getDisableAutoCleanupMenuLabel(), "disableAutomaticCleanup")
+    .addSeparator()
+    .addItem(getBatchSizeMenuLabel(25), "setBatchSize25")
+    .addItem(getBatchSizeMenuLabel(50), "setBatchSize50")
+    .addItem(getBatchSizeMenuLabel(100), "setBatchSize100")
     .addItem("Reset Batch Position", "resetBatchPosition")
     .addSeparator()
-    .addItem(getMenuDryRun() ? "Turn Menu Dry Run OFF" : "Turn Menu Dry Run ON", "toggleMenuDryRun")
     .addItem("Create Labels", "createLabelsFromMenu")
     .addItem("Open Gmail Labels", "showGmailLabels")
     .addItem("Purge All Test Sheets", "purgeAllTestSheets")
     .addItem("Show Registry", "showRegistry")
-    .addItem("Refresh Settings", "updateSettingsSheet")
-    .addItem("Verify Registry Layout", "debugRegistryColumns")
+    .addItem("View Settings", "viewSettings")
+    .addItem("Verify/Fix Registry", "verifyFixRegistryFromMenu")
     .addSeparator()
     .addItem("Help", "showHelp")
     .addToUi();
+}
 
-  refreshRegistryDryRunIndicator();
+function refreshAutoCleanMenu() {
+  buildAutoCleanMenu();
+}
+
+function menuCheckmark(active) {
+  return active ? "\u2713 " : "";
+}
+
+function getCurrentSchedule() {
+  return PropertiesService.getScriptProperties().getProperty(PROP_SCHEDULE) || "";
+}
+
+function getScheduleMenuLabel(scheduleKey, displayLabel) {
+  return `${menuCheckmark(getCurrentSchedule() === scheduleKey)}Enable Auto Cleanup: ${displayLabel}`;
+}
+
+function getDisableAutoCleanupMenuLabel() {
+  return `${menuCheckmark(!getCurrentSchedule())}Disable Auto Cleanup`;
+}
+
+function getBatchSizeMenuLabel(size) {
+  return `${menuCheckmark(getBatchSize() === size)}Set Batch Size: ${size}`;
 }
 
 function onInstall(e) {
@@ -442,6 +472,7 @@ function setBatchSize(size) {
   PropertiesService.getScriptProperties().setProperty(PROP_BATCH_SIZE, String(size));
   resetBatchPosition();
   updateSettingsSheet();
+  refreshAutoCleanMenu();
   SpreadsheetApp.getUi().alert(`Batch size set to ${size}.`);
 }
 
@@ -589,6 +620,10 @@ function addSenderRow(sheet, sender, active, test, notes) {
  ***************/
 
 function getOrCreateRegistrySheet() {
+  return getRegistrySheetLight();
+}
+
+function getRegistrySheetLight() {
   const ss = getRegistrySpreadsheet();
   let sheet = ss.getSheetByName(SHEET_NAME);
   const isNew = !sheet;
@@ -601,15 +636,18 @@ function getOrCreateRegistrySheet() {
 
   if (isNew) {
     initializeRegistrySheet(sheet);
-  } else {
-    ensureRegistryDataValidations(sheet);
-    ensureRegistryColumnFormatting(sheet);
-    ensureRegistryGmailSearchLinks(sheet);
-    trimRegistryTrailingRows(sheet);
   }
 
   updateRegistryDryRunIndicator(sheet);
   return sheet;
+}
+
+function ensureRegistryLayoutMaintenance(sheet) {
+  ensureRegistryColumnFormatting(sheet);
+  ensureRegistryDataValidations(sheet);
+  ensureRegistryGmailSearchLinks(sheet);
+  updateRegistryDryRunIndicator(sheet);
+  return trimRegistryTrailingRows(sheet);
 }
 
 function getRegistryHeaders() {
@@ -701,8 +739,8 @@ function getRegistryHeaderMismatches(sheet) {
   return mismatches;
 }
 
-function debugRegistryColumns() {
-  const sheet = getOrCreateRegistrySheet();
+function verifyFixRegistryFromMenu() {
+  const sheet = getRegistrySheetLight();
   ensureRegistryHeaders(sheet);
 
   const expected = getRegistryHeaders();
@@ -735,10 +773,7 @@ function debugRegistryColumns() {
     lines.push("Column formats: OK");
   }
 
-  ensureRegistryColumnFormatting(sheet);
-  ensureRegistryDataValidations(sheet);
-  ensureRegistryGmailSearchLinks(sheet);
-  const trimmedRows = trimRegistryTrailingRows(sheet);
+  const trimmedRows = ensureRegistryLayoutMaintenance(sheet);
 
   if (trimmedRows > 0) {
     lines.push("");
@@ -764,8 +799,12 @@ function debugRegistryColumns() {
   Logger.log(output);
 
   if (SpreadsheetApp.getActiveSpreadsheet()) {
-    SpreadsheetApp.getUi().alert("Registry Layout Check", output, SpreadsheetApp.getUi().ButtonSet.OK);
+    SpreadsheetApp.getUi().alert("Verify/Fix Registry", output, SpreadsheetApp.getUi().ButtonSet.OK);
   }
+}
+
+function debugRegistryColumns() {
+  verifyFixRegistryFromMenu();
 }
 
 function columnNumberToLetter(column) {
@@ -1236,34 +1275,148 @@ function purgeAllTestSheets() {
  * Settings Sheet
  ***************/
 
-function updateSettingsSheet() {
+function getSettingsSnapshot() {
   const ss = getRegistrySpreadsheet();
-  let sheet = ss.getSheetByName(SETTINGS_SHEET_NAME);
+  const registry = ss.getSheetByName(SHEET_NAME);
+  const lastRun = getPropertyOrBlank(PROP_LAST_RUN);
 
-  if (!sheet) {
-    sheet = ss.insertSheet(SETTINGS_SHEET_NAME);
+  return {
+    scriptVersion: SCRIPT_VERSION,
+    menuDryRun: getMenuDryRun(),
+    schedule: getScheduleLabel(),
+    batchSize: getBatchSize(),
+    nextBatchIndex: getNextBatchIndex(),
+    activeRules: registry ? countActiveRules(registry) : 0,
+    lastRun: lastRun ? formatSettingsTimestamp(lastRun) : "—",
+    lastBatch: getPropertyOrBlank(PROP_LAST_BATCH) || "—",
+    refreshedAt: formatDate(new Date())
+  };
+}
+
+function formatSettingsTimestamp(value) {
+  const date = new Date(value);
+
+  if (isNaN(date.getTime())) return String(value);
+
+  return formatDate(date);
+}
+
+function formatSettingsBoolean(value) {
+  return value ? "ON" : "OFF";
+}
+
+function removeLegacySettingsSheet() {
+  const ss = getRegistrySpreadsheet();
+  const sheet = ss.getSheetByName(SETTINGS_SHEET_NAME);
+
+  if (sheet) {
+    ss.deleteSheet(sheet);
   }
+}
 
-  const registry = getOrCreateRegistrySheet();
+function viewSettings() {
+  removeLegacySettingsSheet();
+  showSettingsDialog();
+}
 
-  sheet.clear();
-  sheet.appendRow(["Setting", "Value"]);
-  sheet.appendRow(["Global Constant Dry Run", GLOBAL_DRY_RUN]);
-  sheet.appendRow(["Menu Dry Run", getMenuDryRun()]);
-  sheet.appendRow(["Effective Dry Run", GLOBAL_DRY_RUN || getMenuDryRun()]);
-  sheet.appendRow(["Automatic Cleanup", getScheduleLabel()]);
-  sheet.appendRow(["Batch Size", getBatchSize()]);
-  sheet.appendRow(["Next Batch Index", getNextBatchIndex()]);
-  sheet.appendRow(["Active Rules", countActiveRules(registry)]);
-  sheet.appendRow(["Last Run", getPropertyOrBlank(PROP_LAST_RUN)]);
-  sheet.appendRow(["Last Batch", getPropertyOrBlank(PROP_LAST_BATCH)]);
-  sheet.appendRow(["Last Refreshed", new Date()]);
+function showSettingsDialog() {
+  const settings = getSettingsSnapshot();
+  const dryRunClass = settings.menuDryRun ? "warn" : "ok";
 
-  sheet.setFrozenRows(1);
-  sheet.getRange(1, 1, 1, 2).setFontWeight("bold");
-  sheet.autoResizeColumns(1, 2);
+  const html = HtmlService.createHtmlOutput(`
+    <style>
+      body {
+        font-family: Roboto, Arial, sans-serif;
+        font-size: 13px;
+        line-height: 1.45;
+        color: #202124;
+        margin: 0;
+        padding: 0 2px 8px;
+      }
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #dadce0;
+      }
+      .title {
+        font-size: 18px;
+        font-weight: 500;
+        margin: 0;
+        color: #274e13;
+      }
+      .version {
+        font-size: 11px;
+        color: #5f6368;
+        background: #f1f3f4;
+        border-radius: 12px;
+        padding: 4px 10px;
+        white-space: nowrap;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        text-align: left;
+        padding: 8px 10px;
+        border-bottom: 1px solid #e8eaed;
+        vertical-align: top;
+      }
+      th {
+        width: 42%;
+        color: #5f6368;
+        font-weight: 500;
+      }
+      td {
+        color: #202124;
+      }
+      tr:last-child th,
+      tr:last-child td {
+        border-bottom: none;
+      }
+      .ok {
+        color: #274e13;
+        font-weight: 500;
+      }
+      .warn {
+        color: #7f4f00;
+        font-weight: 500;
+      }
+      .footer {
+        margin-top: 12px;
+        font-size: 11px;
+        color: #5f6368;
+      }
+    </style>
+    <div class="header">
+      <h1 class="title">AutoClean Settings</h1>
+      <span class="version">${settings.scriptVersion}</span>
+    </div>
+    <table>
+      <tr><th>Menu dry run</th><td class="${dryRunClass}">${formatSettingsBoolean(settings.menuDryRun)}</td></tr>
+      <tr><th>Automatic cleanup</th><td>${settings.schedule}</td></tr>
+      <tr><th>Batch size</th><td>${settings.batchSize}</td></tr>
+      <tr><th>Next batch index</th><td>${settings.nextBatchIndex}</td></tr>
+      <tr><th>Active rules</th><td>${settings.activeRules}</td></tr>
+      <tr><th>Last run</th><td>${settings.lastRun}</td></tr>
+      <tr><th>Last batch</th><td>${settings.lastBatch}</td></tr>
+    </table>
+    <p class="footer">As of ${settings.refreshedAt}</p>
+  `).setWidth(480).setHeight(420);
 
-  updateRegistryDryRunIndicator(registry);
+  SpreadsheetApp.getUi().showModalDialog(html, "AutoClean Settings");
+}
+
+function updateSettingsSheet() {
+  const registry = getRegistrySpreadsheet().getSheetByName(SHEET_NAME);
+
+  if (registry) {
+    updateRegistryDryRunIndicator(registry);
+  }
 }
 
 function showRegistry() {
@@ -1305,6 +1458,7 @@ function createCleanupTrigger(schedule) {
 
   PropertiesService.getScriptProperties().setProperty(PROP_SCHEDULE, schedule);
   updateSettingsSheet();
+  refreshAutoCleanMenu();
 
   SpreadsheetApp.getUi().alert(`Automatic cleanup enabled: ${getScheduleLabel()}`);
 }
@@ -1314,6 +1468,7 @@ function disableAutomaticCleanup() {
 
   PropertiesService.getScriptProperties().deleteProperty(PROP_SCHEDULE);
   updateSettingsSheet();
+  refreshAutoCleanMenu();
 
   SpreadsheetApp.getUi().alert("Automatic cleanup disabled.");
 }
@@ -1355,6 +1510,7 @@ function toggleMenuDryRun() {
   PropertiesService.getScriptProperties().setProperty(PROP_DRY_RUN, String(!current));
 
   updateSettingsSheet();
+  refreshAutoCleanMenu();
 
   SpreadsheetApp.getUi().alert(`Menu Dry Run is now ${!current ? "ON" : "OFF"}.`);
 }
@@ -1435,21 +1591,124 @@ function showGmailLabels() {
 }
 
 function showHelp() {
-  SpreadsheetApp.getUi().alert(
-    "Gmail AutoClean\n\n" +
-    "AutoClean/Learn: add sender to registry.\n" +
-    "AutoClean/Keep: protect this email/thread.\n" +
-    "AutoClean/Ignore: add sender as inactive.\n" +
-    "AutoClean/IgnoredProcessed: shows ignored senders already processed.\n\n" +
-    "AutoClean/Managed: shows messages from senders currently managed by AutoClean.\n\n" +
-    "Mode=count keeps newest N emails.\n" +
-    "Mode=days keeps emails from last N days.\n\n" +
-    "Test mode creates preview sheets and deletes nothing.\n" +
-    "Gmail Search opens Gmail filtered to that sender.\n" +
-    "Menu Dry Run prevents all deletion when ON.\n" +
-    "Batching processes only part of your sender list each scheduled run.\n" +
-    "Use Run Full Cleanup if you want to process all active senders at once."
-  );
+  const html = HtmlService.createHtmlOutput(`
+    <style>
+      body {
+        font-family: Roboto, Arial, sans-serif;
+        font-size: 13px;
+        line-height: 1.45;
+        color: #202124;
+        margin: 0;
+        padding: 0 2px 8px;
+      }
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #dadce0;
+      }
+      .title {
+        font-size: 18px;
+        font-weight: 500;
+        margin: 0;
+        color: #274e13;
+      }
+      .version {
+        font-size: 11px;
+        color: #5f6368;
+        background: #f1f3f4;
+        border-radius: 12px;
+        padding: 4px 10px;
+        white-space: nowrap;
+      }
+      .repo-link {
+        display: inline-block;
+        margin-bottom: 16px;
+        color: #1a73e8;
+        text-decoration: none;
+        font-weight: 500;
+      }
+      .repo-link:hover {
+        text-decoration: underline;
+      }
+      h2 {
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #5f6368;
+        margin: 16px 0 8px;
+      }
+      h2:first-of-type {
+        margin-top: 0;
+      }
+      ul {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      li {
+        margin: 0 0 8px;
+        padding-left: 0;
+      }
+      .label {
+        display: inline-block;
+        font-family: "Roboto Mono", monospace;
+        font-size: 12px;
+        color: #274e13;
+        background: #e8f5e9;
+        border-radius: 4px;
+        padding: 1px 6px;
+        margin-right: 4px;
+      }
+      p {
+        margin: 0 0 8px;
+      }
+      .note {
+        margin-top: 14px;
+        padding: 10px 12px;
+        background: #f8f9fa;
+        border-left: 3px solid #34a853;
+        border-radius: 0 4px 4px 0;
+        color: #3c4043;
+      }
+    </style>
+    <div class="header">
+      <h1 class="title">Gmail AutoClean</h1>
+      <span class="version">${SCRIPT_VERSION}</span>
+    </div>
+    <a class="repo-link" href="${SCRIPT_REPOSITORY_URL}" target="_blank">GitHub repository</a>
+    <h2>Gmail labels</h2>
+    <ul>
+      <li><span class="label">AutoClean/Learn</span> Add sender to registry</li>
+      <li><span class="label">AutoClean/Keep</span> Protect this email or thread</li>
+      <li><span class="label">AutoClean/Ignore</span> Add sender as inactive</li>
+      <li><span class="label">AutoClean/IgnoredProcessed</span> Ignored senders already processed</li>
+      <li><span class="label">AutoClean/Managed</span> Mail from senders AutoClean manages</li>
+    </ul>
+    <h2>Retention rules</h2>
+    <p><strong>count</strong> keeps the newest N emails.<br>
+    <strong>days</strong> keeps emails from the last N days.</p>
+    <h2>Safety and preview</h2>
+    <ul>
+      <li><strong>Test</strong> creates preview sheets and deletes nothing</li>
+      <li><strong>Menu Dry Run</strong> prevents all deletion when ON</li>
+      <li><strong>Gmail Search</strong> opens Gmail filtered to that sender</li>
+    </ul>
+    <h2>Runs and batching</h2>
+    <p>Scheduled cleanup processes the next batch of senders each run.</p>
+    <p class="note">Use <strong>Run Full Cleanup</strong> to process all active senders at once.</p>
+    <h2>Spreadsheet</h2>
+    <ul>
+      <li><strong>View Settings</strong> opens the settings dashboard</li>
+      <li><strong>Verify/Fix Registry</strong> repairs headers, formats, validations, and links</li>
+    </ul>
+  `).setWidth(520).setHeight(540);
+
+  SpreadsheetApp.getUi().showModalDialog(html, "Gmail AutoClean Help");
 }
 
 /***************
