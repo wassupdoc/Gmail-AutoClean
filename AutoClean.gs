@@ -823,7 +823,9 @@ function getRegistryFormatMismatches(sheet) {
 }
 
 function getRegistryLastDataRow(sheet) {
-  const lastRow = Math.max(sheet.getLastRow(), 2);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 1;
+
   const values = sheet.getRange(2, COL.SENDER, lastRow - 1, 1).getValues();
   let lastDataRow = 1;
 
@@ -854,12 +856,13 @@ function ensureRegistryDataValidations(sheet) {
 
 function trimRegistryTrailingRows(sheet) {
   const lastDataRow = getRegistryLastDataRow(sheet);
+  const keepThrough = Math.max(lastDataRow, 2);
   const currentLast = sheet.getLastRow();
 
-  if (currentLast <= lastDataRow) return 0;
+  if (currentLast <= keepThrough) return 0;
 
-  const deleteCount = currentLast - lastDataRow;
-  sheet.deleteRows(lastDataRow + 1, deleteCount);
+  const deleteCount = currentLast - keepThrough;
+  sheet.deleteRows(keepThrough + 1, deleteCount);
   return deleteCount;
 }
 
