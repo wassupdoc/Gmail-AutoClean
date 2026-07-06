@@ -43,10 +43,11 @@ const COL = {
   ADDED: 13,
   ENABLED_SINCE: 14,
   LAST_EMAIL_SEEN: 15,
-  LAST_BATCH: 16
+  LAST_BATCH: 16,
+  GMAIL_SEARCH: 17
 };
 
-const REGISTRY_COLUMN_COUNT = 16;
+const REGISTRY_COLUMN_COUNT = 17;
 
 /***************
  * Menu
@@ -554,10 +555,12 @@ function addSenderRow(sheet, sender, active, test, notes) {
     now,
     active ? now : "",
     "",
+    "",
     ""
   ]]);
 
   applyRegistryRowFormatting(sheet, row);
+  setRegistryGmailSearchFormula(sheet, row);
   sheet.autoResizeColumns(1, REGISTRY_COLUMN_COUNT);
 }
 
@@ -581,6 +584,7 @@ function getOrCreateRegistrySheet() {
   } else {
     ensureRegistryDataValidations(sheet);
     ensureRegistryColumnFormatting(sheet);
+    ensureRegistryGmailSearchLinks(sheet);
     trimRegistryTrailingRows(sheet);
   }
 
@@ -605,7 +609,8 @@ function getRegistryHeaders() {
     "Added",
     "Enabled Since",
     "Last Email Seen",
-    "Last Batch"
+    "Last Batch",
+    "Gmail Search"
   ];
 }
 
@@ -712,6 +717,7 @@ function debugRegistryColumns() {
 
   ensureRegistryColumnFormatting(sheet);
   ensureRegistryDataValidations(sheet);
+  ensureRegistryGmailSearchLinks(sheet);
   const trimmedRows = trimRegistryTrailingRows(sheet);
 
   if (trimmedRows > 0) {
@@ -722,7 +728,7 @@ function debugRegistryColumns() {
   if (sheet.getLastColumn() > REGISTRY_COLUMN_COUNT) {
     lines.push("");
     lines.push(
-      `Warning: ${sheet.getLastColumn() - REGISTRY_COLUMN_COUNT} extra column(s) after column P.`
+      `Warning: ${sheet.getLastColumn() - REGISTRY_COLUMN_COUNT} extra column(s) after column ${columnNumberToLetter(REGISTRY_COLUMN_COUNT)}.`
     );
   }
 
@@ -766,7 +772,8 @@ function getRegistryFormattedColumns() {
     { col: COL.ADDED, label: "Added", type: "date" },
     { col: COL.ENABLED_SINCE, label: "Enabled Since", type: "date" },
     { col: COL.LAST_EMAIL_SEEN, label: "Last Email Seen", type: "date" },
-    { col: COL.LAST_BATCH, label: "Last Batch", type: "text" }
+    { col: COL.LAST_BATCH, label: "Last Batch", type: "text" },
+    { col: COL.GMAIL_SEARCH, label: "Gmail Search", type: "text" }
   ];
 }
 
@@ -854,6 +861,31 @@ function trimRegistryTrailingRows(sheet) {
   const deleteCount = currentLast - lastDataRow;
   sheet.deleteRows(lastDataRow + 1, deleteCount);
   return deleteCount;
+}
+
+function makeGmailSenderSearchQuery(sender) {
+  return `from:${sender} -in:trash -in:spam`;
+}
+
+function makeGmailSenderSearchUrl(sender) {
+  return `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(makeGmailSenderSearchQuery(sender))}`;
+}
+
+function setRegistryGmailSearchFormula(sheet, row) {
+  const senderCell = `A${row}`;
+  const formula =
+    `=IF(${senderCell}="","",HYPERLINK("https://mail.google.com/mail/u/0/#search/" & ENCODEURL("from:" & ${senderCell} & " -in:trash -in:spam"), "Search"))`;
+
+  sheet.getRange(row, COL.GMAIL_SEARCH).setFormula(formula);
+}
+
+function ensureRegistryGmailSearchLinks(sheet) {
+  const lastDataRow = getRegistryLastDataRow(sheet);
+  if (lastDataRow < 2) return;
+
+  for (let row = 2; row <= lastDataRow; row++) {
+    setRegistryGmailSearchFormula(sheet, row);
+  }
 }
 
 function applyRegistryRowFormatting(sheet, row) {
@@ -1390,6 +1422,7 @@ function showHelp() {
     "Mode=count keeps newest N emails.\n" +
     "Mode=days keeps emails from last N days.\n\n" +
     "Test mode creates preview sheets and deletes nothing.\n" +
+    "Gmail Search opens Gmail filtered to that sender.\n" +
     "Menu Dry Run prevents all deletion when ON.\n" +
     "Batching processes only part of your sender list each scheduled run.\n" +
     "Use Run Full Cleanup if you want to process all active senders at once."

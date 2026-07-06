@@ -284,6 +284,7 @@ The registry updates automatically every time AutoClean runs.
 | Enabled Since | Date cleanup became active |
 | Last Email Seen | Most recent email received |
 | Last Batch | Batch that last processed this sender |
+| Gmail Search | Clickable link to open Gmail search for that sender (`from:… -in:trash -in:spam`) |
 
 **Registry tips:**
 
