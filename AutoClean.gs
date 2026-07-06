@@ -1,6 +1,26 @@
 /***************
  * Gmail AutoClean — Spreadsheet-Bound Version
+ *
+ * Version: see SCRIPT_VERSION below
+ * Repository: https://github.com/wassupdoc/Gmail-AutoClean
+ *
+ * Copyright (C) 2026 LiVuP LLC
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  ***************/
+
+const SCRIPT_VERSION = "20260706-1";
 
 const GLOBAL_DRY_RUN = false; // false = live unless row Test is checked or Menu Dry Run is ON
 
@@ -740,7 +760,7 @@ function debugRegistryColumns() {
     ? `${formatMismatches.length} column format(s) were corrected.`
     : "Column formats are correct.";
 
-  const output = `${headerSummary}\n${formatSummary}\n\n${lines.join("\n")}`;
+  const output = `Script version: ${SCRIPT_VERSION}\n${headerSummary}\n${formatSummary}\n\n${lines.join("\n")}`;
   Logger.log(output);
 
   if (SpreadsheetApp.getActiveSpreadsheet()) {
