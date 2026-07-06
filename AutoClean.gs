@@ -75,7 +75,7 @@ function onOpen(e) {
     .addItem("Purge All Test Sheets", "purgeAllTestSheets")
     .addItem("Show Registry", "showRegistry")
     .addItem("Refresh Settings", "updateSettingsSheet")
-    .addItem("Verify Registry Columns", "debugRegistryColumns")
+    .addItem("Verify Registry Layout", "debugRegistryColumns")
     .addSeparator()
     .addItem("Help", "showHelp")
     .addToUi();
@@ -173,8 +173,6 @@ function runAutoClean(runFull) {
 function runAutoCleanBody(runFull) {
   const ss = getRegistrySpreadsheet();
   const sheet = getOrCreateRegistrySheet();
-
-  ensureRegistryHeaders(sheet);
   assertRegistryHeaders(sheet);
   ensureLabelsExist();
   const managedLabel = getOrCreateLabel(MANAGED_LABEL_NAME);
@@ -580,6 +578,10 @@ function getOrCreateRegistrySheet() {
 
   if (isNew) {
     initializeRegistrySheet(sheet);
+  } else {
+    ensureRegistryDataValidations(sheet);
+    ensureRegistryColumnFormatting(sheet);
+    trimRegistryTrailingRows(sheet);
   }
 
   updateRegistryDryRunIndicator(sheet);
@@ -680,7 +682,8 @@ function debugRegistryColumns() {
 
   const expected = getRegistryHeaders();
   const actual = sheet.getRange(1, 1, 1, REGISTRY_COLUMN_COUNT).getValues()[0];
-  const mismatches = getRegistryHeaderMismatches(sheet);
+  const headerMismatches = getRegistryHeaderMismatches(sheet);
+  const formatMismatches = getRegistryFormatMismatches(sheet);
   const lines = [];
 
   for (let i = 0; i < expected.length; i++) {
@@ -696,6 +699,26 @@ function debugRegistryColumns() {
     }
   }
 
+  if (formatMismatches.length) {
+    lines.push("");
+    lines.push("Column formats to fix:");
+    formatMismatches.forEach(m => {
+      lines.push(`${m.letter} (${m.column}) ${m.label}: ${m.actual}`);
+    });
+  } else {
+    lines.push("");
+    lines.push("Column formats: OK");
+  }
+
+  ensureRegistryColumnFormatting(sheet);
+  ensureRegistryDataValidations(sheet);
+  const trimmedRows = trimRegistryTrailingRows(sheet);
+
+  if (trimmedRows > 0) {
+    lines.push("");
+    lines.push(`Removed ${trimmedRows} blank row(s) below your sender list.`);
+  }
+
   if (sheet.getLastColumn() > REGISTRY_COLUMN_COUNT) {
     lines.push("");
     lines.push(
@@ -703,15 +726,19 @@ function debugRegistryColumns() {
     );
   }
 
-  const summary = mismatches.length
-    ? `${mismatches.length} of ${REGISTRY_COLUMN_COUNT} columns do not match.`
-    : `All ${REGISTRY_COLUMN_COUNT} columns match.`;
+  const headerSummary = headerMismatches.length
+    ? `${headerMismatches.length} of ${REGISTRY_COLUMN_COUNT} headers do not match.`
+    : `All ${REGISTRY_COLUMN_COUNT} headers match.`;
 
-  const output = `${summary}\n\n${lines.join("\n")}`;
+  const formatSummary = formatMismatches.length
+    ? `${formatMismatches.length} column format(s) were corrected.`
+    : "Column formats are correct.";
+
+  const output = `${headerSummary}\n${formatSummary}\n\n${lines.join("\n")}`;
   Logger.log(output);
 
   if (SpreadsheetApp.getActiveSpreadsheet()) {
-    SpreadsheetApp.getUi().alert("Registry Column Check", output, SpreadsheetApp.getUi().ButtonSet.OK);
+    SpreadsheetApp.getUi().alert("Registry Layout Check", output, SpreadsheetApp.getUi().ButtonSet.OK);
   }
 }
 
@@ -725,6 +752,108 @@ function columnNumberToLetter(column) {
   }
 
   return letter;
+}
+
+function getRegistryFormattedColumns() {
+  return [
+    { col: COL.LAST_CHECKED, label: "Last Checked", type: "datetime" },
+    { col: COL.LAST_REMOVED, label: "Last Removed", type: "number" },
+    { col: COL.TOTAL_REMOVED, label: "Total Removed", type: "number" },
+    { col: COL.WOULD_DELETE, label: "Would Delete", type: "number" },
+    { col: COL.PROTECTED_KEPT, label: "Protected Kept", type: "number" },
+    { col: COL.TEST_SHEET, label: "Test Sheet", type: "text" },
+    { col: COL.NOTES, label: "Notes", type: "text" },
+    { col: COL.ADDED, label: "Added", type: "date" },
+    { col: COL.ENABLED_SINCE, label: "Enabled Since", type: "date" },
+    { col: COL.LAST_EMAIL_SEEN, label: "Last Email Seen", type: "date" },
+    { col: COL.LAST_BATCH, label: "Last Batch", type: "text" }
+  ];
+}
+
+function registryFormatPattern(type) {
+  if (type === "datetime") return "m/d/yyyy h:mm:ss";
+  if (type === "date") return "m/d/yyyy";
+  if (type === "number") return "0";
+  return "@";
+}
+
+function registryFormatMatches(type, format) {
+  const actual = String(format || "").trim().toLowerCase();
+
+  if (type === "text") {
+    return actual.startsWith("@");
+  }
+
+  if (type === "number") {
+    return actual === "0" || actual === "#,##0" || actual === "0.##########";
+  }
+
+  if (type === "date" || type === "datetime") {
+    return actual.includes("y") || actual.includes("d");
+  }
+
+  return false;
+}
+
+function getRegistryFormatMismatches(sheet) {
+  const sampleRow = 2;
+  const mismatches = [];
+
+  getRegistryFormattedColumns().forEach(column => {
+    const format = sheet.getRange(sampleRow, column.col).getNumberFormat();
+
+    if (!registryFormatMatches(column.type, format)) {
+      mismatches.push({
+        column: column.col,
+        letter: columnNumberToLetter(column.col),
+        label: column.label,
+        actual: format || "(default)"
+      });
+    }
+  });
+
+  return mismatches;
+}
+
+function getRegistryLastDataRow(sheet) {
+  const lastRow = Math.max(sheet.getLastRow(), 2);
+  const values = sheet.getRange(2, COL.SENDER, lastRow - 1, 1).getValues();
+  let lastDataRow = 1;
+
+  for (let i = 0; i < values.length; i++) {
+    const sender = String(values[i][0] || "").trim();
+    if (sender) lastDataRow = i + 2;
+  }
+
+  return lastDataRow;
+}
+
+function ensureRegistryColumnFormatting(sheet) {
+  getRegistryFormattedColumns().forEach(column => {
+    const letter = columnNumberToLetter(column.col);
+    sheet.getRange(`${letter}2:${letter}`)
+      .setNumberFormat(registryFormatPattern(column.type));
+  });
+}
+
+function ensureRegistryDataValidations(sheet) {
+  const lastDataRow = getRegistryLastDataRow(sheet);
+  if (lastDataRow < 2) return;
+
+  for (let row = 2; row <= lastDataRow; row++) {
+    applyRegistryRowFormatting(sheet, row);
+  }
+}
+
+function trimRegistryTrailingRows(sheet) {
+  const lastDataRow = getRegistryLastDataRow(sheet);
+  const currentLast = sheet.getLastRow();
+
+  if (currentLast <= lastDataRow) return 0;
+
+  const deleteCount = currentLast - lastDataRow;
+  sheet.deleteRows(lastDataRow + 1, deleteCount);
+  return deleteCount;
 }
 
 function applyRegistryRowFormatting(sheet, row) {
@@ -746,12 +875,7 @@ function applyRegistryRowFormatting(sheet, row) {
 }
 
 function initializeRegistrySheet(sheet) {
-  const maxRows = Math.max(sheet.getMaxRows(), 1000);
-
-  for (let row = 2; row <= maxRows - 1; row++) {
-    applyRegistryRowFormatting(sheet, row);
-  }
-
+  ensureRegistryColumnFormatting(sheet);
   sheet.autoResizeColumns(1, REGISTRY_COLUMN_COUNT);
 }
 

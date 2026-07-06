@@ -289,6 +289,7 @@ The registry updates automatically every time AutoClean runs.
 
 - Do not duplicate sender rows — duplicates are skipped and noted in the **Notes** column
 - Do not delete rows — set **Active** to false instead to pause a sender
+- Use **AutoClean → Verify Registry Layout** to check headers, column formats, and row validations
 
 ---
 
@@ -557,7 +558,7 @@ Show Registry
 
 Refresh Settings
 
-Verify Registry Columns
+Verify Registry Layout
 
 Help
 ```
