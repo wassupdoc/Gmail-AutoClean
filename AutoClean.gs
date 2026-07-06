@@ -7,6 +7,7 @@ const GLOBAL_DRY_RUN = false; // false = live unless row Test is checked or Menu
 const LEARN_LABEL_NAME = "AutoClean/Learn";
 const KEEP_LABEL_NAME = "AutoClean/Keep";
 const IGNORE_LABEL_NAME = "AutoClean/Ignore";
+const IGNORE_PROCESSED_LABEL_NAME = "AutoClean/IgnoredProcessed";
 const MANAGED_LABEL_NAME = "AutoClean/Managed";
 
 const REGISTRY_SPREADSHEET_NAME = "AutoClean Registry";
@@ -74,6 +75,7 @@ function onOpen(e) {
     .addItem("Purge All Test Sheets", "purgeAllTestSheets")
     .addItem("Show Registry", "showRegistry")
     .addItem("Refresh Settings", "updateSettingsSheet")
+    .addItem("Verify Registry Columns", "debugRegistryColumns")
     .addSeparator()
     .addItem("Help", "showHelp")
     .addToUi();
@@ -153,6 +155,16 @@ function runAutoClean(runFull) {
 
   try {
     runAutoCleanBody(runFull);
+  } catch (error) {
+    const message = String(error.message || error);
+    Logger.log(message);
+
+    if (hasUi) {
+      SpreadsheetApp.getUi().alert(message);
+      return;
+    }
+
+    throw error;
   } finally {
     lock.releaseLock();
   }
@@ -163,6 +175,7 @@ function runAutoCleanBody(runFull) {
   const sheet = getOrCreateRegistrySheet();
 
   ensureRegistryHeaders(sheet);
+  assertRegistryHeaders(sheet);
   ensureLabelsExist();
   const managedLabel = getOrCreateLabel(MANAGED_LABEL_NAME);
 
@@ -483,12 +496,13 @@ function learnIgnoredSendersFromLabel(sheet) {
   const ignoreLabel = GmailApp.getUserLabelByName(IGNORE_LABEL_NAME);
   if (!ignoreLabel) return;
 
+  const ignoredProcessedLabel = getOrCreateLabel(IGNORE_PROCESSED_LABEL_NAME);
   const threads = getAllLabelThreads(ignoreLabel);
   const existing = getExistingSenders(sheet);
 
   let added = 0;
   let alreadyExisting = 0;
-  let labelsRemoved = 0;
+  let labelsProcessed = 0;
 
   threads.forEach(thread => {
     thread.getMessages().forEach(message => {
@@ -505,13 +519,21 @@ function learnIgnoredSendersFromLabel(sheet) {
       Logger.log(`Added ignored sender: ${sender}`);
     });
 
-    thread.removeLabel(ignoreLabel);
-    labelsRemoved++;
+    markIgnoreThreadProcessed(thread, ignoreLabel, ignoredProcessedLabel);
+    labelsProcessed++;
   });
 
   Logger.log(`Ignore added: ${added}`);
   Logger.log(`Ignore already existing skipped: ${alreadyExisting}`);
-  Logger.log(`Ignore labels removed: ${labelsRemoved}`);
+  Logger.log(`Ignore labels processed: ${labelsProcessed}`);
+}
+
+function markIgnoreThreadProcessed(thread, ignoreLabel, ignoredProcessedLabel) {
+  thread.removeLabel(ignoreLabel);
+
+  if (!threadHasLabel(thread, IGNORE_PROCESSED_LABEL_NAME)) {
+    thread.addLabel(ignoredProcessedLabel);
+  }
 }
 
 function addSenderRow(sheet, sender, active, test, notes) {
@@ -613,6 +635,96 @@ function ensureRegistryHeaders(sheet) {
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   sheet.setFrozenRows(1);
   sheet.getRange(1, 1, 1, REGISTRY_COLUMN_COUNT).setFontWeight("bold");
+}
+
+function assertRegistryHeaders(sheet) {
+  const mismatches = getRegistryHeaderMismatches(sheet);
+
+  if (!mismatches.length) return;
+
+  const details = mismatches
+    .map(m => `Column ${m.letter} (${m.column}): "${m.actual}" (expected "${m.expected}")`)
+    .join("\n");
+
+  throw new Error(
+    "Registry headers do not match the expected layout.\n\n" +
+    details +
+    "\n\nFix row 1 on AutoCleanSenders before running cleanup."
+  );
+}
+
+function getRegistryHeaderMismatches(sheet) {
+  const expected = getRegistryHeaders();
+  const actual = sheet.getRange(1, 1, 1, expected.length).getValues()[0];
+  const mismatches = [];
+
+  for (let i = 0; i < expected.length; i++) {
+    const actualHeader = String(actual[i] || "").trim();
+
+    if (actualHeader !== expected[i]) {
+      mismatches.push({
+        column: i + 1,
+        letter: columnNumberToLetter(i + 1),
+        actual: actualHeader || "(blank)",
+        expected: expected[i]
+      });
+    }
+  }
+
+  return mismatches;
+}
+
+function debugRegistryColumns() {
+  const sheet = getOrCreateRegistrySheet();
+  ensureRegistryHeaders(sheet);
+
+  const expected = getRegistryHeaders();
+  const actual = sheet.getRange(1, 1, 1, REGISTRY_COLUMN_COUNT).getValues()[0];
+  const mismatches = getRegistryHeaderMismatches(sheet);
+  const lines = [];
+
+  for (let i = 0; i < expected.length; i++) {
+    const col = i + 1;
+    const letter = columnNumberToLetter(col);
+    const actualHeader = String(actual[i] || "").trim();
+    const status = actualHeader === expected[i] ? "OK" : "MISMATCH";
+
+    lines.push(`${letter} (${col}) ${expected[i]}: ${status}`);
+
+    if (status !== "OK") {
+      lines.push(`  found: "${actualHeader || "(blank)"}"`);
+    }
+  }
+
+  if (sheet.getLastColumn() > REGISTRY_COLUMN_COUNT) {
+    lines.push("");
+    lines.push(
+      `Warning: ${sheet.getLastColumn() - REGISTRY_COLUMN_COUNT} extra column(s) after column P.`
+    );
+  }
+
+  const summary = mismatches.length
+    ? `${mismatches.length} of ${REGISTRY_COLUMN_COUNT} columns do not match.`
+    : `All ${REGISTRY_COLUMN_COUNT} columns match.`;
+
+  const output = `${summary}\n\n${lines.join("\n")}`;
+  Logger.log(output);
+
+  if (SpreadsheetApp.getActiveSpreadsheet()) {
+    SpreadsheetApp.getUi().alert("Registry Column Check", output, SpreadsheetApp.getUi().ButtonSet.OK);
+  }
+}
+
+function columnNumberToLetter(column) {
+  let letter = "";
+
+  while (column > 0) {
+    const mod = (column - 1) % 26;
+    letter = String.fromCharCode(65 + mod) + letter;
+    column = Math.floor((column - 1) / 26);
+  }
+
+  return letter;
 }
 
 function applyRegistryRowFormatting(sheet, row) {
@@ -1117,6 +1229,7 @@ function ensureLabelsExist() {
   getOrCreateLabel(LEARN_LABEL_NAME);
   getOrCreateLabel(KEEP_LABEL_NAME);
   getOrCreateLabel(IGNORE_LABEL_NAME);
+  getOrCreateLabel(IGNORE_PROCESSED_LABEL_NAME);
   getOrCreateLabel(MANAGED_LABEL_NAME);
 }
 
@@ -1135,8 +1248,9 @@ function showGmailLabels() {
     <p><a href="https://mail.google.com/mail/u/0/#label/AutoClean%2FLearn" target="_blank">Open AutoClean/Learn</a></p>
     <p><a href="https://mail.google.com/mail/u/0/#label/AutoClean%2FKeep" target="_blank">Open AutoClean/Keep</a></p>
     <p><a href="https://mail.google.com/mail/u/0/#label/AutoClean%2FIgnore" target="_blank">Open AutoClean/Ignore</a></p>
+    <p><a href="https://mail.google.com/mail/u/0/#label/AutoClean%2FIgnoredProcessed" target="_blank">Open AutoClean/IgnoredProcessed</a></p>
     <p><a href="https://mail.google.com/mail/u/0/#label/AutoClean%2FManaged" target="_blank">Open AutoClean/Managed</a></p>
-  `).setWidth(350).setHeight(220);
+  `).setWidth(350).setHeight(260);
 
   SpreadsheetApp.getUi().showModalDialog(html, "AutoClean Gmail Labels");
 }
@@ -1146,7 +1260,8 @@ function showHelp() {
     "Gmail AutoClean\n\n" +
     "AutoClean/Learn: add sender to registry.\n" +
     "AutoClean/Keep: protect this email/thread.\n" +
-    "AutoClean/Ignore: add sender as inactive.\n\n" +
+    "AutoClean/Ignore: add sender as inactive.\n" +
+    "AutoClean/IgnoredProcessed: shows ignored senders already processed.\n\n" +
     "AutoClean/Managed: shows messages from senders currently managed by AutoClean.\n\n" +
     "Mode=count keeps newest N emails.\n" +
     "Mode=days keeps emails from last N days.\n\n" +

@@ -137,13 +137,14 @@ Longer term, the more polished approach would be a small **Updater** menu item u
 
 # How It Works
 
-AutoClean uses four Gmail labels.
+AutoClean uses five Gmail labels.
 
 ```
 AutoClean
 ├── Learn
 ├── Keep
 ├── Ignore
+├── IgnoredProcessed
 └── Managed
 ```
 
@@ -191,6 +192,8 @@ Examples:
 
 Protected emails are excluded before retention rules are calculated.
 
+**AutoClean/Keep** stays on protected mail permanently — AutoClean never removes it.
+
 ---
 
 # AutoClean/Ignore
@@ -205,7 +208,9 @@ Active = FALSE
 
 AutoClean will never process that sender unless you later enable it manually.
 
-The Ignore label is removed after the sender has been added to the registry as inactive.
+After AutoClean processes the email, **AutoClean/Ignore** is removed and **AutoClean/IgnoredProcessed** is applied so you can still see ignored mail in Gmail without reprocessing it every run.
+
+Use **AutoClean/Ignore** for new senders to block. Browse **AutoClean/IgnoredProcessed** to review what has already been ignored.
 
 Perfect for:
 
@@ -221,6 +226,14 @@ Perfect for:
 - **Ignore runs before Learn** on every cleanup run. If a sender is not yet in the registry, Ignore adds them as inactive before Learn can add them as active.
 - **Ignore does not undo Learn.** If cleanup already ran and Learn added an **active** row, applying Ignore later will not deactivate that sender — uncheck **Active** in the spreadsheet instead.
 - Senders **not in the registry at all** are never processed by AutoClean; Ignore is only needed when you want them recorded as blocked.
+
+---
+
+# AutoClean/IgnoredProcessed
+
+AutoClean applies this label automatically after processing **AutoClean/Ignore**.
+
+It is not something you apply manually. Use it in Gmail to see which ignored senders have already been added to the registry as inactive.
 
 ---
 # AutoClean/Managed
@@ -543,6 +556,8 @@ Purge All Test Sheets
 Show Registry
 
 Refresh Settings
+
+Verify Registry Columns
 
 Help
 ```
