@@ -170,6 +170,7 @@ Every new sender starts with:
 
 - Test Mode = ON
 - Active = ON
+- Keep Unread = ON
 - Keep newest 1 email
 
 Nothing is deleted until you've reviewed the results.
@@ -273,11 +274,12 @@ The registry updates automatically every time AutoClean runs.
 | Value | Number of emails or days |
 | Active | Enable cleanup |
 | Test | Preview only |
+| Keep Unread | When checked, unread mail from this sender is never deleted (default **ON** for new senders) |
 | Last Checked | Last time this sender was processed |
 | Last Removed | Emails removed last run |
 | Total Removed | Lifetime deleted |
 | Would Delete | Preview count |
-| Protected Kept | Protected emails |
+| Protected Kept | Starred, AutoClean/Keep, and unread (when **Keep Unread** is on) |
 | Test Sheet | Clickable link to the sender's `TEST_*` preview worksheet (set after the first test run) |
 | Notes | Optional notes |
 | Added | Rule creation date |
@@ -462,6 +464,7 @@ The report shows every email:
 | KEEP - RETENTION RULE | Kept by retention |
 | KEEP - STARRED | Protected |
 | KEEP - AUTOCLEAN KEEP LABEL | Protected |
+| KEEP - UNREAD | Protected because **Keep Unread** is on and the message is unread |
 | WOULD DELETE | Would be deleted |
 
 Each row contains a direct Gmail link so you can inspect the email.
@@ -533,9 +536,12 @@ The following emails are never deleted:
 
 - ⭐ Starred emails
 - 🏷 AutoClean/Keep
+- 📬 Unread mail from senders with **Keep Unread** enabled
 - 🚫 Inactive senders
 - 🗑 Trash
 - 🚫 Spam
+
+**Keep Unread** is per sender and defaults to **ON** for new senders (including Learn). Uncheck it on any sender where you want unread mail eligible for cleanup. When enabled, AutoClean will not remove mail you have not opened yet; once you read a message, normal count/days rules apply on the next run.
 
 ## Deleted emails and recovery
 

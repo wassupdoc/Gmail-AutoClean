@@ -20,7 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  ***************/
 
-const SCRIPT_VERSION = "20260706-5";
+const SCRIPT_VERSION = "20260707-3";
 const SCRIPT_REPOSITORY_URL = "https://github.com/wassupdoc/Gmail-AutoClean";
 
 const GLOBAL_DRY_RUN = false; // Developer-only safety switch; not shown in the UI (use Menu Dry Run)
@@ -54,21 +54,22 @@ const COL = {
   VALUE: 3,
   ACTIVE: 4,
   TEST: 5,
-  LAST_CHECKED: 6,
-  LAST_REMOVED: 7,
-  TOTAL_REMOVED: 8,
-  WOULD_DELETE: 9,
-  PROTECTED_KEPT: 10,
-  TEST_SHEET: 11,
-  NOTES: 12,
-  ADDED: 13,
-  ENABLED_SINCE: 14,
-  LAST_EMAIL_SEEN: 15,
-  LAST_BATCH: 16,
-  GMAIL_SEARCH: 17
+  KEEP_UNREAD: 6,
+  LAST_CHECKED: 7,
+  LAST_REMOVED: 8,
+  TOTAL_REMOVED: 9,
+  WOULD_DELETE: 10,
+  PROTECTED_KEPT: 11,
+  TEST_SHEET: 12,
+  NOTES: 13,
+  ADDED: 14,
+  ENABLED_SINCE: 15,
+  LAST_EMAIL_SEEN: 16,
+  LAST_BATCH: 17,
+  GMAIL_SEARCH: 18
 };
 
-const REGISTRY_COLUMN_COUNT = 17;
+const REGISTRY_COLUMN_COUNT = 18;
 
 /***************
  * Menu
@@ -167,7 +168,10 @@ function getCheckboxEditValue(e) {
   if (e.value === "TRUE") return true;
   if (e.value === "FALSE") return false;
 
-  const value = e.range.getValue();
+  return isCheckboxTrue(e.range.getValue());
+}
+
+function isCheckboxTrue(value) {
   return value === true || String(value).toLowerCase() === "true";
 }
 
@@ -244,6 +248,7 @@ function runAutoCleanBody(runFull) {
   let messagesFound = 0;
   let messagesSkippedStarred = 0;
   let messagesProtectedByKeepLabel = 0;
+  let messagesSkippedUnread = 0;
   let messagesToTrash = 0;
 
   Logger.log("==================================================");
@@ -316,6 +321,13 @@ function runAutoCleanBody(runFull) {
           return;
         }
 
+        if (rule.keepUnread && message.isUnread()) {
+          item.reason = "KEEP - UNREAD";
+          protectedItems.push(item);
+          messagesSkippedUnread++;
+          return;
+        }
+
         candidates.push(item);
       });
     });
@@ -357,6 +369,7 @@ function runAutoCleanBody(runFull) {
     Logger.log(`Mode: ${rule.mode}`);
     Logger.log(`Value: ${rule.value}`);
     Logger.log(`Row test mode: ${rule.test}`);
+    Logger.log(`Keep unread: ${rule.keepUnread}`);
     Logger.log(`Effective mode: ${ruleDryRun ? "DRY RUN" : "LIVE"}`);
     Logger.log(`Search used: ${query}`);
     Logger.log(`Total found: ${candidates.length + protectedItems.length}`);
@@ -411,6 +424,7 @@ function runAutoCleanBody(runFull) {
   Logger.log(`Messages found: ${messagesFound}`);
   Logger.log(`Starred kept: ${messagesSkippedStarred}`);
   Logger.log(`AutoClean/Keep protected: ${messagesProtectedByKeepLabel}`);
+  Logger.log(`Unread kept: ${messagesSkippedUnread}`);
   Logger.log(`Messages eligible: ${messagesToTrash}`);
   Logger.log("==================================================");
 }
@@ -596,6 +610,7 @@ function addSenderRow(sheet, sender, active, test, notes) {
     DEFAULT_VALUE,
     active,
     test,
+    true,
     "",
     0,
     0,
@@ -657,6 +672,7 @@ function getRegistryHeaders() {
     "Value",
     "Active",
     "Test",
+    "Keep Unread",
     "Last Checked",
     "Last Removed",
     "Total Removed",
@@ -681,6 +697,75 @@ function migrateRemoveLastCleanupColumn(sheet) {
   }
 }
 
+function migrateAddKeepUnreadColumn(sheet) {
+  if (sheet.getLastColumn() < 6) return;
+
+  const testHeader = String(sheet.getRange(1, COL.TEST).getValue() || "").trim();
+  const nextHeader = String(sheet.getRange(1, COL.TEST + 1).getValue() || "").trim();
+
+  if (testHeader !== "Test") return;
+  if (nextHeader === "Keep Unread") return;
+  if (nextHeader !== "Last Checked") return;
+
+  sheet.insertColumnAfter(COL.TEST);
+  sheet.getRange(1, COL.KEEP_UNREAD).setValue("Keep Unread");
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow >= 2) {
+    const range = getRegistryColumnRange(sheet, COL.KEEP_UNREAD, lastRow);
+    range.insertCheckboxes();
+    range.setValue(true);
+  }
+}
+
+function getRegistryColumnRange(sheet, column, lastRow) {
+  const endRow = lastRow || sheet.getLastRow();
+  const numRows = endRow - 1;
+  return sheet.getRange(2, column, numRows, 1);
+}
+
+function columnHasCheckboxValidation(sheet, row, column) {
+  const validation = sheet.getRange(row, column).getDataValidation();
+  if (!validation) return false;
+  return validation.getCriteriaType() === SpreadsheetApp.DataValidationCriteria.CHECKBOX;
+}
+
+function repairCorruptedStatColumns(sheet) {
+  if (!columnHasCheckboxValidation(sheet, 2, COL.LAST_CHECKED)) return 0;
+
+  const lastDataRow = Math.max(getRegistryLastDataRow(sheet), 2);
+  const statColumns = [
+    COL.LAST_CHECKED,
+    COL.LAST_REMOVED,
+    COL.TOTAL_REMOVED,
+    COL.WOULD_DELETE,
+    COL.PROTECTED_KEPT
+  ];
+
+  statColumns.forEach(column => {
+    const range = getRegistryColumnRange(sheet, column, lastDataRow);
+    const values = range.getValues();
+
+    const repairedValues = values.map(row => {
+      const value = row[0];
+
+      if (value === true || value === false) {
+        if (column === COL.LAST_CHECKED) return [""];
+        return [0];
+      }
+
+      return row;
+    });
+
+    range.clearDataValidations();
+    range.setValues(repairedValues);
+  });
+
+  ensureRegistryColumnFormatting(sheet);
+  Logger.log("Repaired stat columns corrupted by checkbox migration.");
+  return statColumns.length;
+}
+
 function registryHeadersValid(sheet) {
   const expected = getRegistryHeaders();
   const lastCol = sheet.getLastColumn();
@@ -693,6 +778,8 @@ function registryHeadersValid(sheet) {
 
 function ensureRegistryHeaders(sheet) {
   migrateRemoveLastCleanupColumn(sheet);
+  migrateAddKeepUnreadColumn(sheet);
+  repairCorruptedStatColumns(sheet);
 
   if (registryHeadersValid(sheet)) return;
 
@@ -959,6 +1046,7 @@ function applyRegistryRowFormatting(sheet, row) {
   sheet.getRange(row, COL.MODE).setDataValidation(modeRule);
   sheet.getRange(row, COL.ACTIVE).insertCheckboxes();
   sheet.getRange(row, COL.TEST).insertCheckboxes();
+  sheet.getRange(row, COL.KEEP_UNREAD).insertCheckboxes();
 
   const valueRule = SpreadsheetApp.newDataValidation()
     .requireNumberGreaterThan(0)
@@ -1042,6 +1130,7 @@ function getActiveRules(sheet) {
     const value = Number(values[i][COL.VALUE - 1] || DEFAULT_VALUE);
     const active = values[i][COL.ACTIVE - 1];
     const test = values[i][COL.TEST - 1];
+    const keepUnread = values[i][COL.KEEP_UNREAD - 1];
 
     if (!sender) continue;
     if (active === false || String(active).toLowerCase() === "false") continue;
@@ -1073,7 +1162,8 @@ function getActiveRules(sheet) {
       sender,
       mode,
       value,
-      test: test === true || String(test).toLowerCase() === "true"
+      test: isCheckboxTrue(test),
+      keepUnread: isCheckboxTrue(keepUnread)
     });
   }
 
@@ -1695,6 +1785,7 @@ function showHelp() {
     <h2>Safety and preview</h2>
     <ul>
       <li><strong>Test</strong> creates preview sheets and deletes nothing</li>
+      <li><strong>Keep Unread</strong> skips unread mail for that sender</li>
       <li><strong>Menu Dry Run</strong> prevents all deletion when ON</li>
       <li><strong>Gmail Search</strong> opens Gmail filtered to that sender</li>
     </ul>
