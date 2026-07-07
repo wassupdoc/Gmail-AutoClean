@@ -20,7 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  ***************/
 
-const SCRIPT_VERSION = "20260707-3";
+const SCRIPT_VERSION = "20260707-5";
 const SCRIPT_REPOSITORY_URL = "https://github.com/wassupdoc/Gmail-AutoClean";
 
 const GLOBAL_DRY_RUN = false; // Developer-only safety switch; not shown in the UI (use Menu Dry Run)
@@ -40,6 +40,12 @@ const SETTINGS_SHEET_NAME = "AutoCleanSettings";
 const DEFAULT_MODE = "count";
 const DEFAULT_VALUE = 1;
 const DEFAULT_BATCH_SIZE = 50;
+
+const MAX_THREADS_PER_SENDER = 500;
+const MAX_MANAGED_SYNC_THREADS = 500;
+const MAX_LOG_ITEMS_PER_RULE = 20;
+const MAX_TEST_SHEET_ROWS = 250;
+const RUN_TIME_BUDGET_MS = 4 * 60 * 1000 + 30 * 1000; // 4m30s; leave ~90s for wrap-up
 
 const PROP_DRY_RUN = "AUTO_CLEAN_GLOBAL_DRY_RUN";
 const PROP_SCHEDULE = "AUTO_CLEAN_SCHEDULE";
@@ -263,13 +269,26 @@ function runAutoCleanBody(runFull) {
   Logger.log(`Registry: ${ss.getUrl()}`);
   Logger.log("==================================================");
 
-  rules.forEach(rule => {
+  const runStartedAt = Date.now();
+  let rulesProcessed = 0;
+  let stoppedEarly = false;
+
+  for (let i = 0; i < rules.length; i++) {
+    if (isRunTimeBudgetExceeded(runStartedAt)) {
+      stoppedEarly = true;
+      Logger.log(`Time budget reached after ${rulesProcessed} sender(s); stopping early.`);
+      break;
+    }
+
+    const rule = rules[i];
     const ruleDryRun = globalDryRun || rule.test;
     const query = `from:${rule.sender} -in:trash -in:spam`;
-    const threads = searchAllThreads(query);
+    const threads = searchAllThreads(query, 100, MAX_THREADS_PER_SENDER);
 
-    if (threads.length > 500) {
-      Logger.log(`Warning: ${rule.sender} returned ${threads.length} threads (pagination required).`);
+    if (threads.length >= MAX_THREADS_PER_SENDER) {
+      Logger.log(
+        `Warning: ${rule.sender} hit the ${MAX_THREADS_PER_SENDER}-thread cap; older mail may remain unprocessed this run.`
+      );
     }
 
     const candidates = [];
@@ -362,6 +381,7 @@ function runAutoCleanBody(runFull) {
     const allKeptItems = protectedItems.concat(retentionKeptItems);
 
     sendersProcessed++;
+    rulesProcessed++;
     messagesToTrash += oldItems.length;
 
     Logger.log("--------------------------------------------------");
@@ -378,13 +398,12 @@ function runAutoCleanBody(runFull) {
     Logger.log(`${ruleDryRun ? "Would trash" : "Trashed"}: ${oldItems.length}`);
     Logger.log(`Last email seen: ${lastEmailSeen ? formatDate(lastEmailSeen) : "none"}`);
 
-    allKeptItems.forEach(item => {
-      Logger.log(`[${item.reason}] ${formatDate(item.date)} | ${item.subject}`);
-    });
+    // Per-message logs are redundant in test/dry-run mode; test sheets already list them.
+    if (!ruleDryRun) {
+      logRuleItems(oldItems);
+    }
 
     oldItems.forEach(item => {
-      Logger.log(`[${item.reason}] ${formatDate(item.date)} | ${item.subject}`);
-
       if (!ruleDryRun) {
         item.message.moveToTrash();
       }
@@ -403,23 +422,34 @@ function runAutoCleanBody(runFull) {
       lastEmailSeen,
       batchLabel
     );
-  });
+  }
 
-  completeBatch(batchInfo);
+  if (stoppedEarly && rules.length > rulesProcessed) {
+    const remaining = rules.slice(rulesProcessed).map(rule => rule.sender);
+    Logger.log(`Senders not processed this run: ${remaining.join(", ")}`);
+  }
+
+  completeBatch(batchInfo, rulesProcessed, stoppedEarly);
 
   PropertiesService.getScriptProperties().setProperty(PROP_LAST_RUN, new Date().toISOString());
   PropertiesService.getScriptProperties().setProperty(PROP_LAST_BATCH, batchLabel);
 
-  cleanupObsoleteTestSheets(sheet);
+  if (!stoppedEarly) {
+    cleanupObsoleteTestSheets(sheet);
+  } else {
+    Logger.log("Skipped test-sheet cleanup this run to preserve time budget.");
+  }
+
   updateSettingsSheet();
 
   Logger.log("==================================================");
   Logger.log("AutoClean Summary");
   Logger.log(`Run type: ${runFull ? "FULL" : "BATCH"}`);
   Logger.log(`Batch: ${batchLabel}`);
+  Logger.log(`Stopped early: ${stoppedEarly}`);
   Logger.log(`Effective global dry run: ${globalDryRun}`);
   Logger.log(`Active rules total: ${allRules.length}`);
-  Logger.log(`Rules processed: ${rules.length}`);
+  Logger.log(`Rules processed: ${rulesProcessed} of ${rules.length}`);
   Logger.log(`Senders processed: ${sendersProcessed}`);
   Logger.log(`Messages found: ${messagesFound}`);
   Logger.log(`Starred kept: ${messagesSkippedStarred}`);
@@ -437,7 +467,8 @@ function getFullBatch(allRules) {
   return {
     rules: allRules,
     label: `FULL ${allRules.length} rule(s)`,
-    advanceIndex: false
+    advanceIndex: false,
+    startIndex: 0
   };
 }
 
@@ -450,7 +481,8 @@ function getNextBatch(allRules) {
       rules: [],
       label: "No active rules",
       advanceIndex: true,
-      nextIndex: 0
+      nextIndex: 0,
+      startIndex: 0
     };
   }
 
@@ -468,12 +500,20 @@ function getNextBatch(allRules) {
     rules: batchRules,
     label: `Rows ${batchRules.length ? batchRules[0].rowNumber : "-"}-${batchRules.length ? batchRules[batchRules.length - 1].rowNumber : "-"} (${start + 1}-${end} of ${total})`,
     advanceIndex: true,
-    nextIndex
+    nextIndex,
+    startIndex: start
   };
 }
 
-function completeBatch(batchInfo) {
+function completeBatch(batchInfo, processedCount, stoppedEarly) {
   if (!batchInfo || !batchInfo.advanceIndex) return;
+
+  if (stoppedEarly && processedCount < batchInfo.rules.length) {
+    setNextBatchIndex(batchInfo.startIndex + processedCount);
+    Logger.log(`Batch paused at sender ${processedCount + 1} of ${batchInfo.rules.length}; will resume on next run.`);
+    return;
+  }
+
   setNextBatchIndex(batchInfo.nextIndex !== undefined ? batchInfo.nextIndex : 0);
 }
 
@@ -1253,11 +1293,29 @@ function writeTestSheet(ss, mainSheet, rule, keptItems, oldItems) {
   ]);
 
   const now = new Date();
-
-  const rows = [
-    ...keptItems.map(item => testSheetRow(now, rule, item, item.reason)),
-    ...oldItems.map(item => testSheetRow(now, rule, item, "WOULD DELETE"))
+  const allItems = [
+    ...keptItems.map(item => ({ item, action: item.reason })),
+    ...oldItems.map(item => ({ item, action: "WOULD DELETE" }))
   ];
+  const totalItems = allItems.length;
+  const visibleItems = allItems.slice(0, MAX_TEST_SHEET_ROWS);
+  const hiddenCount = totalItems - visibleItems.length;
+
+  const rows = visibleItems.map(entry => testSheetRow(now, rule, entry.item, entry.action));
+
+  if (hiddenCount > 0) {
+    rows.push([
+      now,
+      rule.sender,
+      rule.mode,
+      rule.value,
+      "NOTE",
+      "",
+      "",
+      "",
+      `${hiddenCount} more message(s) not shown; use Gmail Search for the full list.`
+    ]);
+  }
 
   if (rows.length > 0) {
     testSheet.getRange(2, 1, rows.length, 9).setValues(rows);
@@ -1940,10 +1998,10 @@ function syncManagedLabels(sheet) {
   const activeSenders = getActiveSenderSet(sheet);
 
   const query = `label:"${MANAGED_LABEL_NAME}" -in:trash -in:spam`;
-  const threads = searchAllThreads(query);
+  const threads = searchAllThreads(query, 100, MAX_MANAGED_SYNC_THREADS);
 
-  if (threads.length > 500) {
-    Logger.log(`Warning: Managed label sync returned ${threads.length} threads (pagination required).`);
+  if (threads.length >= MAX_MANAGED_SYNC_THREADS) {
+    Logger.log(`Warning: Managed label sync hit the ${MAX_MANAGED_SYNC_THREADS}-thread cap.`);
   }
 
   let removed = 0;
@@ -2006,22 +2064,44 @@ function makeTestSheetName(rule) {
   return makeTestSheetNameFromSender(rule.sender);
 }
 
-function searchAllThreads(query, pageSize = 100) {
+function searchAllThreads(query, pageSize = 100, maxResults = 0) {
   const all = [];
   let start = 0;
 
   while (true) {
-    const batch = GmailApp.search(query, start, pageSize);
+    const remaining = maxResults > 0 ? maxResults - all.length : pageSize;
+    const requestSize = maxResults > 0 ? Math.min(pageSize, remaining) : pageSize;
+
+    if (maxResults > 0 && requestSize <= 0) break;
+
+    const batch = GmailApp.search(query, start, requestSize || pageSize);
     if (!batch.length) break;
 
     all.push(...batch);
 
-    if (batch.length < pageSize) break;
+    if (batch.length < requestSize) break;
+    if (maxResults > 0 && all.length >= maxResults) break;
 
     start += batch.length;
   }
 
   return all;
+}
+
+function isRunTimeBudgetExceeded(runStartedAt) {
+  return Date.now() - runStartedAt >= RUN_TIME_BUDGET_MS;
+}
+
+function logRuleItems(items) {
+  const limit = MAX_LOG_ITEMS_PER_RULE;
+
+  items.slice(0, limit).forEach(item => {
+    Logger.log(`[${item.reason}] ${formatDate(item.date)} | ${item.subject}`);
+  });
+
+  if (items.length > limit) {
+    Logger.log(`... and ${items.length - limit} more`);
+  }
 }
 
 function getAllLabelThreads(label, pageSize = 100) {

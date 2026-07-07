@@ -310,6 +310,8 @@ Default batch size:
 50 senders
 ```
 
+Google Apps Script has a **6-minute** execution limit. AutoClean stops early when approaching that limit and resumes on the next batch run. If you see timeouts, lower the batch size (try **25** or **15**) and avoid **Run Full Cleanup** on large registries.
+
 ---
 
 ## Why Batching Exists
@@ -401,15 +403,17 @@ The Settings sheet also tracks:
 
 | Registry Size | Recommended Batch Size |
 |---:|---:|
-| 1–100 senders | 50 or 100 |
-| 100–500 senders | 50 |
-| 500+ senders | 25 or 50 |
+| 1–100 senders | 50 |
+| 100–500 senders | 25–50 |
+| 500+ senders | 25 |
 
 Most users should start with:
 
 ```text
 50
 ```
+
+**If a run times out:** use **Set Batch Size: 25** (or lower), run **Next Batch** instead of **Full Cleanup**, and leave heavy test-mode senders (large mailboxes) in Test until reviewed. AutoClean caps each sender at 500 threads per run and pauses before the 6-minute Apps Script limit when needed.
 
 ---
 
