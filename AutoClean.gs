@@ -20,7 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  ***************/
 
-const SCRIPT_VERSION = "20260707-5";
+const SCRIPT_VERSION = "20260708-3";
 const SCRIPT_REPOSITORY_URL = "https://github.com/wassupdoc/Gmail-AutoClean";
 
 const GLOBAL_DRY_RUN = false; // Developer-only safety switch; not shown in the UI (use Menu Dry Run)
@@ -667,7 +667,6 @@ function addSenderRow(sheet, sender, active, test, notes) {
 
   applyRegistryRowFormatting(sheet, row);
   setRegistryGmailSearchFormula(sheet, row);
-  sheet.autoResizeColumns(1, REGISTRY_COLUMN_COUNT);
 }
 
 /***************
@@ -687,65 +686,148 @@ function getRegistrySheetLight() {
     sheet = ss.insertSheet(SHEET_NAME);
   }
 
-  ensureRegistryHeaders(sheet);
+  // Light on open/cleanup. New sheets get one full reconcile with auto-fit widths.
+  reconcileRegistrySheet(sheet, {
+    mode: isNew ? "full" : "light",
+    resizeWidths: isNew
+  });
 
+  // New sheet only: apply alternating colors once.
   if (isNew) {
-    initializeRegistrySheet(sheet);
+    applyLightAlternatingColorsToSheet(sheet);
   }
-
-  updateRegistryDryRunIndicator(sheet);
   return sheet;
 }
 
 function ensureRegistryLayoutMaintenance(sheet) {
-  ensureRegistryColumnFormatting(sheet);
-  ensureRegistryDataValidations(sheet);
-  ensureRegistryGmailSearchLinks(sheet);
-  updateRegistryDryRunIndicator(sheet);
-  return trimRegistryTrailingRows(sheet);
+  // Formats/validations/links without touching user column widths.
+  return reconcileRegistrySheet(sheet, { mode: "full", resizeWidths: false }).trimmedRows;
 }
 
-function getRegistryHeaders() {
+/**
+ * Single source of truth for registry columns.
+ * Verify/Fix and layout maintenance enforce this schema.
+ */
+function getRegistrySchema() {
   return [
-    "Sender",
-    "Mode",
-    "Value",
-    "Active",
-    "Test",
-    "Keep Unread",
-    "Last Checked",
-    "Last Removed",
-    "Total Removed",
-    "Would Delete",
-    "Protected Kept",
-    "Test Sheet",
-    "Notes",
-    "Added",
-    "Enabled Since",
-    "Last Email Seen",
-    "Last Batch",
-    "Gmail Search"
+    { col: COL.SENDER, header: "Sender", type: "text", maxWidth: 280 },
+    { col: COL.MODE, header: "Mode", type: "list", listValues: ["count", "days"] },
+    { col: COL.VALUE, header: "Value", type: "positiveNumber" },
+    { col: COL.ACTIVE, header: "Active", type: "checkbox" },
+    { col: COL.TEST, header: "Test", type: "checkbox" },
+    { col: COL.KEEP_UNREAD, header: "Keep Unread", type: "checkbox", checkboxDefault: true },
+    { col: COL.LAST_CHECKED, header: "Last Checked", type: "datetime" },
+    { col: COL.LAST_REMOVED, header: "Last Removed", type: "number" },
+    { col: COL.TOTAL_REMOVED, header: "Total Removed", type: "number" },
+    { col: COL.WOULD_DELETE, header: "Would Delete", type: "number" },
+    { col: COL.PROTECTED_KEPT, header: "Protected Kept", type: "number" },
+    { col: COL.TEST_SHEET, header: "Test Sheet", type: "text", maxWidth: 200 },
+    { col: COL.NOTES, header: "Notes", type: "text", maxWidth: 180 },
+    { col: COL.ADDED, header: "Added", type: "date" },
+    { col: COL.ENABLED_SINCE, header: "Enabled Since", type: "date" },
+    { col: COL.LAST_EMAIL_SEEN, header: "Last Email Seen", type: "date" },
+    { col: COL.LAST_BATCH, header: "Last Batch", type: "text", maxWidth: 180 },
+    { col: COL.GMAIL_SEARCH, header: "Gmail Search", type: "formula" }
   ];
 }
 
+function getRegistryHeaders() {
+  return getRegistrySchema().map(column => column.header);
+}
+
+/**
+ * Reconcile registry layout against getRegistrySchema().
+ *
+ * mode "light" (cleanup / Learn / open): migrations + heal corruption + headers
+ * mode "full" (Verify/Fix): also formats, validations, Gmail formulas, trim
+ *
+ * Column widths are only changed when resizeWidths is true (Verify/Fix menu),
+ * so user-adjusted widths are left alone during normal runs.
+ */
+function reconcileRegistrySheet(sheet, options) {
+  const opts = options || {};
+  const mode = opts.mode === "full" ? "full" : "light";
+  const resizeWidths = !!opts.resizeWidths;
+  const report = {
+    mode,
+    migrated: false,
+    healedKeepUnread: 0,
+    healedStatColumns: 0,
+    formatsFixed: 0,
+    validationsApplied: false,
+    widthsApplied: false,
+    gmailLinksEnsured: false,
+    trimmedRows: 0,
+    headerMismatches: [],
+    formatMismatchesBefore: [],
+    notes: []
+  };
+
+  if (migrateRemoveLastCleanupColumn(sheet)) {
+    report.migrated = true;
+    report.notes.push("Removed legacy Last Cleanup column.");
+  }
+
+  if (migrateAddKeepUnreadColumn(sheet)) {
+    report.migrated = true;
+    report.notes.push("Added Keep Unread column with default ON.");
+  }
+
+  report.healedStatColumns = healCheckboxCorruptionOnStatColumns(sheet);
+  if (report.healedStatColumns) {
+    report.notes.push("Cleared checkbox corruption from numeric/date columns.");
+  }
+
+  report.healedKeepUnread = healKeepUnreadColumn(sheet);
+  if (report.healedKeepUnread) {
+    report.notes.push("Restored Keep Unread checkboxes (moved stray dates to Last Checked when blank).");
+  }
+
+  ensureRegistryHeaderRow(sheet);
+  report.headerMismatches = getRegistryHeaderMismatches(sheet);
+
+  if (mode === "full") {
+    report.formatMismatchesBefore = getRegistryFormatMismatches(sheet);
+    report.formatsFixed = applyRegistrySchemaFormats(sheet);
+    applyRegistrySchemaValidations(sheet);
+    report.validationsApplied = true;
+    ensureRegistryGmailSearchLinks(sheet);
+    report.gmailLinksEnsured = true;
+    report.trimmedRows = trimRegistryTrailingRows(sheet);
+    if (report.trimmedRows > 0) {
+      report.notes.push(`Removed ${report.trimmedRows} blank row(s) below the sender list.`);
+    }
+  }
+
+  if (resizeWidths) {
+    applyRegistrySchemaWidths(sheet);
+    report.widthsApplied = true;
+    report.notes.push("Column widths auto-fitted to content.");
+  }
+
+  updateRegistryDryRunIndicator(sheet);
+  return report;
+}
+
 function migrateRemoveLastCleanupColumn(sheet) {
-  if (sheet.getLastColumn() < 6) return;
+  if (sheet.getLastColumn() < 6) return false;
 
   const header = String(sheet.getRange(1, 6).getValue() || "").trim();
-  if (header === "Last Cleanup") {
-    sheet.deleteColumn(6);
-  }
+  if (header !== "Last Cleanup") return false;
+
+  sheet.deleteColumn(6);
+  return true;
 }
 
 function migrateAddKeepUnreadColumn(sheet) {
-  if (sheet.getLastColumn() < 6) return;
+  if (sheet.getLastColumn() < 6) return false;
 
   const testHeader = String(sheet.getRange(1, COL.TEST).getValue() || "").trim();
   const nextHeader = String(sheet.getRange(1, COL.TEST + 1).getValue() || "").trim();
 
-  if (testHeader !== "Test") return;
-  if (nextHeader === "Keep Unread") return;
-  if (nextHeader !== "Last Checked") return;
+  if (testHeader !== "Test") return false;
+  if (nextHeader === "Keep Unread") return false;
+  if (nextHeader !== "Last Checked") return false;
 
   sheet.insertColumnAfter(COL.TEST);
   sheet.getRange(1, COL.KEEP_UNREAD).setValue("Keep Unread");
@@ -756,11 +838,13 @@ function migrateAddKeepUnreadColumn(sheet) {
     range.insertCheckboxes();
     range.setValue(true);
   }
+
+  return true;
 }
 
 function getRegistryColumnRange(sheet, column, lastRow) {
   const endRow = lastRow || sheet.getLastRow();
-  const numRows = endRow - 1;
+  const numRows = Math.max(endRow - 1, 1);
   return sheet.getRange(2, column, numRows, 1);
 }
 
@@ -770,17 +854,17 @@ function columnHasCheckboxValidation(sheet, row, column) {
   return validation.getCriteriaType() === SpreadsheetApp.DataValidationCriteria.CHECKBOX;
 }
 
-function repairCorruptedStatColumns(sheet) {
+function isDateValue(value) {
+  return value instanceof Date && !isNaN(value.getTime());
+}
+
+function healCheckboxCorruptionOnStatColumns(sheet) {
   if (!columnHasCheckboxValidation(sheet, 2, COL.LAST_CHECKED)) return 0;
 
   const lastDataRow = Math.max(getRegistryLastDataRow(sheet), 2);
-  const statColumns = [
-    COL.LAST_CHECKED,
-    COL.LAST_REMOVED,
-    COL.TOTAL_REMOVED,
-    COL.WOULD_DELETE,
-    COL.PROTECTED_KEPT
-  ];
+  const statColumns = getRegistrySchema()
+    .filter(column => column.type === "number" || column.type === "datetime" || column.type === "date")
+    .map(column => column.col);
 
   statColumns.forEach(column => {
     const range = getRegistryColumnRange(sheet, column, lastDataRow);
@@ -790,7 +874,9 @@ function repairCorruptedStatColumns(sheet) {
       const value = row[0];
 
       if (value === true || value === false) {
-        if (column === COL.LAST_CHECKED) return [""];
+        if (column === COL.LAST_CHECKED || column === COL.ADDED || column === COL.ENABLED_SINCE || column === COL.LAST_EMAIL_SEEN) {
+          return [""];
+        }
         return [0];
       }
 
@@ -801,9 +887,64 @@ function repairCorruptedStatColumns(sheet) {
     range.setValues(repairedValues);
   });
 
-  ensureRegistryColumnFormatting(sheet);
-  Logger.log("Repaired stat columns corrupted by checkbox migration.");
+  applyRegistrySchemaFormats(sheet);
+  Logger.log("Healed checkbox corruption on stat/date columns.");
   return statColumns.length;
+}
+
+function healKeepUnreadColumn(sheet) {
+  const header = String(sheet.getRange(1, COL.KEEP_UNREAD).getValue() || "").trim();
+  if (header !== "Keep Unread") return 0;
+
+  const lastDataRow = getRegistryLastDataRow(sheet);
+  if (lastDataRow < 2) return 0;
+
+  const keepRange = getRegistryColumnRange(sheet, COL.KEEP_UNREAD, lastDataRow);
+  const checkedRange = getRegistryColumnRange(sheet, COL.LAST_CHECKED, lastDataRow);
+  const keepValues = keepRange.getValues();
+  const checkedValues = checkedRange.getValues();
+
+  let movedDates = 0;
+  let needsCheckboxRestore = !columnHasCheckboxValidation(sheet, 2, COL.KEEP_UNREAD);
+
+  for (let i = 0; i < keepValues.length; i++) {
+    const keepValue = keepValues[i][0];
+    const checkedValue = checkedValues[i][0];
+
+    if (isDateValue(keepValue)) {
+      if (!isDateValue(checkedValue) && (checkedValue === "" || checkedValue === null)) {
+        checkedValues[i][0] = keepValue;
+      }
+      keepValues[i][0] = true;
+      movedDates++;
+      needsCheckboxRestore = true;
+      continue;
+    }
+
+    if (keepValue === true || keepValue === false) continue;
+
+    keepValues[i][0] = true;
+    needsCheckboxRestore = true;
+  }
+
+  if (!movedDates && !needsCheckboxRestore) return 0;
+
+  keepRange.clearDataValidations();
+  keepRange.setNumberFormat("@");
+  keepRange.setValues(keepValues);
+  keepRange.insertCheckboxes();
+
+  if (movedDates > 0) {
+    checkedRange.setValues(checkedValues);
+    applyRegistrySchemaFormats(sheet);
+  }
+
+  Logger.log(
+    movedDates
+      ? `Healed Keep Unread: restored checkboxes and moved ${movedDates} date value(s) to Last Checked.`
+      : "Healed Keep Unread: restored checkboxes."
+  );
+  return movedDates || 1;
 }
 
 function registryHeadersValid(sheet) {
@@ -816,17 +957,21 @@ function registryHeadersValid(sheet) {
   return expected.every((header, i) => String(actual[i] || "") === header);
 }
 
-function ensureRegistryHeaders(sheet) {
-  migrateRemoveLastCleanupColumn(sheet);
-  migrateAddKeepUnreadColumn(sheet);
-  repairCorruptedStatColumns(sheet);
-
-  if (registryHeadersValid(sheet)) return;
+function ensureRegistryHeaderRow(sheet) {
+  if (registryHeadersValid(sheet)) {
+    sheet.setFrozenRows(1);
+    sheet.getRange(1, 1, 1, REGISTRY_COLUMN_COUNT).setFontWeight("bold");
+    return;
+  }
 
   const headers = getRegistryHeaders();
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   sheet.setFrozenRows(1);
   sheet.getRange(1, 1, 1, REGISTRY_COLUMN_COUNT).setFontWeight("bold");
+}
+
+function ensureRegistryHeaders(sheet) {
+  reconcileRegistrySheet(sheet, { mode: "light" });
 }
 
 function assertRegistryHeaders(sheet) {
@@ -841,7 +986,7 @@ function assertRegistryHeaders(sheet) {
   throw new Error(
     "Registry headers do not match the expected layout.\n\n" +
     details +
-    "\n\nFix row 1 on AutoCleanSenders before running cleanup."
+    "\n\nRun AutoClean → Verify/Fix Registry, then try again."
   );
 }
 
@@ -867,13 +1012,18 @@ function getRegistryHeaderMismatches(sheet) {
 }
 
 function verifyFixRegistryFromMenu() {
-  const sheet = getRegistrySheetLight();
-  ensureRegistryHeaders(sheet);
+  const ss = getRegistrySpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_NAME);
 
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_NAME);
+  }
+
+  const report = reconcileRegistrySheet(sheet, { mode: "full", resizeWidths: true });
+  applyLightAlternatingColorsToAllSheets(ss);
   const expected = getRegistryHeaders();
   const actual = sheet.getRange(1, 1, 1, REGISTRY_COLUMN_COUNT).getValues()[0];
-  const headerMismatches = getRegistryHeaderMismatches(sheet);
-  const formatMismatches = getRegistryFormatMismatches(sheet);
+  const formatMismatchesAfter = getRegistryFormatMismatches(sheet);
   const lines = [];
 
   for (let i = 0; i < expected.length; i++) {
@@ -881,31 +1031,33 @@ function verifyFixRegistryFromMenu() {
     const letter = columnNumberToLetter(col);
     const actualHeader = String(actual[i] || "").trim();
     const status = actualHeader === expected[i] ? "OK" : "MISMATCH";
+    const schema = getRegistrySchema()[i];
 
-    lines.push(`${letter} (${col}) ${expected[i]}: ${status}`);
+    lines.push(`${letter} (${col}) ${expected[i]} [${schema.type}]: ${status}`);
 
     if (status !== "OK") {
       lines.push(`  found: "${actualHeader || "(blank)"}"`);
     }
   }
 
-  if (formatMismatches.length) {
-    lines.push("");
-    lines.push("Column formats to fix:");
-    formatMismatches.forEach(m => {
+  lines.push("");
+  if (formatMismatchesAfter.length) {
+    lines.push("Column formats still mismatched after reconcile:");
+    formatMismatchesAfter.forEach(m => {
       lines.push(`${m.letter} (${m.column}) ${m.label}: ${m.actual}`);
     });
   } else {
-    lines.push("");
-    lines.push("Column formats: OK");
+    lines.push("Column formats: OK (schema applied)");
   }
 
-  const trimmedRows = ensureRegistryLayoutMaintenance(sheet);
+  lines.push("Validations: applied from schema");
+  lines.push(report.widthsApplied ? "Column widths: auto-fitted to content" : "Column widths: left unchanged");
+  lines.push("Gmail Search formulas: ensured");
 
-  if (trimmedRows > 0) {
+  report.notes.forEach(note => {
     lines.push("");
-    lines.push(`Removed ${trimmedRows} blank row(s) below your sender list.`);
-  }
+    lines.push(note);
+  });
 
   if (sheet.getLastColumn() > REGISTRY_COLUMN_COUNT) {
     lines.push("");
@@ -914,15 +1066,15 @@ function verifyFixRegistryFromMenu() {
     );
   }
 
-  const headerSummary = headerMismatches.length
-    ? `${headerMismatches.length} of ${REGISTRY_COLUMN_COUNT} headers do not match.`
-    : `All ${REGISTRY_COLUMN_COUNT} headers match.`;
+  const headerSummary = report.headerMismatches.length
+    ? `${report.headerMismatches.length} of ${REGISTRY_COLUMN_COUNT} headers still do not match.`
+    : `All ${REGISTRY_COLUMN_COUNT} headers match schema.`;
 
-  const formatSummary = formatMismatches.length
-    ? `${formatMismatches.length} column format(s) were corrected.`
-    : "Column formats are correct.";
+  const formatSummary = report.formatMismatchesBefore.length
+    ? `${report.formatMismatchesBefore.length} column format(s) were corrected.`
+    : "Column formats already matched schema.";
 
-  const output = `Script version: ${SCRIPT_VERSION}\n${headerSummary}\n${formatSummary}\n\n${lines.join("\n")}`;
+  const output = `Script version: ${SCRIPT_VERSION}\nReconcile: full\n${headerSummary}\n${formatSummary}\n\n${lines.join("\n")}`;
   Logger.log(output);
 
   if (SpreadsheetApp.getActiveSpreadsheet()) {
@@ -932,6 +1084,28 @@ function verifyFixRegistryFromMenu() {
 
 function debugRegistryColumns() {
   verifyFixRegistryFromMenu();
+}
+
+function applyLightAlternatingColorsToAllSheets(ss) {
+  ss.getSheets().forEach(sheet => {
+    applyLightAlternatingColorsToSheet(sheet);
+  });
+}
+
+function applyLightAlternatingColorsToSheet(sheet) {
+  // Remove prior banding to avoid stacking multiple bandings.
+  const existing = sheet.getBandings();
+  existing.forEach(banding => banding.remove());
+
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+
+  // Preserve header row styling (including dry-run header highlight) by
+  // applying banding only from row 2 onward.
+  if (lastRow < 2 || lastCol < 1) return;
+
+  const range = sheet.getRange(2, 1, lastRow - 1, lastCol);
+  range.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
 }
 
 function columnNumberToLetter(column) {
@@ -946,38 +1120,21 @@ function columnNumberToLetter(column) {
   return letter;
 }
 
-function getRegistryFormattedColumns() {
-  return [
-    { col: COL.LAST_CHECKED, label: "Last Checked", type: "datetime" },
-    { col: COL.LAST_REMOVED, label: "Last Removed", type: "number" },
-    { col: COL.TOTAL_REMOVED, label: "Total Removed", type: "number" },
-    { col: COL.WOULD_DELETE, label: "Would Delete", type: "number" },
-    { col: COL.PROTECTED_KEPT, label: "Protected Kept", type: "number" },
-    { col: COL.TEST_SHEET, label: "Test Sheet", type: "text" },
-    { col: COL.NOTES, label: "Notes", type: "text" },
-    { col: COL.ADDED, label: "Added", type: "date" },
-    { col: COL.ENABLED_SINCE, label: "Enabled Since", type: "date" },
-    { col: COL.LAST_EMAIL_SEEN, label: "Last Email Seen", type: "date" },
-    { col: COL.LAST_BATCH, label: "Last Batch", type: "text" },
-    { col: COL.GMAIL_SEARCH, label: "Gmail Search", type: "text" }
-  ];
-}
-
 function registryFormatPattern(type) {
   if (type === "datetime") return "m/d/yyyy h:mm:ss";
   if (type === "date") return "m/d/yyyy";
-  if (type === "number") return "0";
+  if (type === "number" || type === "positiveNumber") return "0";
   return "@";
 }
 
 function registryFormatMatches(type, format) {
   const actual = String(format || "").trim().toLowerCase();
 
-  if (type === "text") {
-    return actual.startsWith("@");
+  if (type === "text" || type === "checkbox" || type === "list" || type === "formula") {
+    return actual === "" || actual === "general" || actual.startsWith("@");
   }
 
-  if (type === "number") {
+  if (type === "number" || type === "positiveNumber") {
     return actual === "0" || actual === "#,##0" || actual === "0.##########";
   }
 
@@ -992,14 +1149,16 @@ function getRegistryFormatMismatches(sheet) {
   const sampleRow = 2;
   const mismatches = [];
 
-  getRegistryFormattedColumns().forEach(column => {
+  getRegistrySchema().forEach(column => {
+    if (column.type === "checkbox" || column.type === "list") return;
+
     const format = sheet.getRange(sampleRow, column.col).getNumberFormat();
 
     if (!registryFormatMatches(column.type, format)) {
       mismatches.push({
         column: column.col,
         letter: columnNumberToLetter(column.col),
-        label: column.label,
+        label: column.header,
         actual: format || "(default)"
       });
     }
@@ -1023,21 +1182,46 @@ function getRegistryLastDataRow(sheet) {
   return lastDataRow;
 }
 
-function ensureRegistryColumnFormatting(sheet) {
-  getRegistryFormattedColumns().forEach(column => {
+function applyRegistrySchemaFormats(sheet) {
+  let fixed = 0;
+
+  getRegistrySchema().forEach(column => {
+    if (column.type === "checkbox") return;
+
     const letter = columnNumberToLetter(column.col);
-    sheet.getRange(`${letter}2:${letter}`)
-      .setNumberFormat(registryFormatPattern(column.type));
+    const range = sheet.getRange(`${letter}2:${letter}`);
+    const before = sheet.getRange(2, column.col).getNumberFormat();
+    const pattern = registryFormatPattern(column.type);
+
+    range.setNumberFormat(pattern);
+
+    if (!registryFormatMatches(column.type, before)) fixed++;
   });
+
+  return fixed;
 }
 
-function ensureRegistryDataValidations(sheet) {
+function applyRegistrySchemaValidations(sheet) {
   const lastDataRow = getRegistryLastDataRow(sheet);
   if (lastDataRow < 2) return;
 
   for (let row = 2; row <= lastDataRow; row++) {
     applyRegistryRowFormatting(sheet, row);
   }
+}
+
+function applyRegistrySchemaWidths(sheet) {
+  // Fit to header + cell content (Sheets auto-width), then cap very wide text columns.
+  sheet.autoResizeColumns(1, REGISTRY_COLUMN_COUNT);
+
+  getRegistrySchema().forEach(column => {
+    if (!column.maxWidth) return;
+
+    const current = sheet.getColumnWidth(column.col);
+    if (current > column.maxWidth) {
+      sheet.setColumnWidth(column.col, column.maxWidth);
+    }
+  });
 }
 
 function trimRegistryTrailingRows(sheet) {
@@ -1078,32 +1262,40 @@ function ensureRegistryGmailSearchLinks(sheet) {
 }
 
 function applyRegistryRowFormatting(sheet, row) {
-  const modeRule = SpreadsheetApp.newDataValidation()
-    .requireValueInList(["count", "days"], true)
-    .setAllowInvalid(false)
-    .build();
+  getRegistrySchema().forEach(column => {
+    const cell = sheet.getRange(row, column.col);
 
-  sheet.getRange(row, COL.MODE).setDataValidation(modeRule);
-  sheet.getRange(row, COL.ACTIVE).insertCheckboxes();
-  sheet.getRange(row, COL.TEST).insertCheckboxes();
-  sheet.getRange(row, COL.KEEP_UNREAD).insertCheckboxes();
+    if (column.type === "checkbox") {
+      cell.insertCheckboxes();
+      return;
+    }
 
-  const valueRule = SpreadsheetApp.newDataValidation()
-    .requireNumberGreaterThan(0)
-    .setAllowInvalid(false)
-    .build();
+    if (column.type === "list" && column.listValues) {
+      const rule = SpreadsheetApp.newDataValidation()
+        .requireValueInList(column.listValues, true)
+        .setAllowInvalid(false)
+        .build();
+      cell.setDataValidation(rule);
+      return;
+    }
 
-  sheet.getRange(row, COL.VALUE).setDataValidation(valueRule);
+    if (column.type === "positiveNumber") {
+      const rule = SpreadsheetApp.newDataValidation()
+        .requireNumberGreaterThan(0)
+        .setAllowInvalid(false)
+        .build();
+      cell.setDataValidation(rule);
+    }
+  });
 }
 
 function initializeRegistrySheet(sheet) {
-  ensureRegistryColumnFormatting(sheet);
-  sheet.autoResizeColumns(1, REGISTRY_COLUMN_COUNT);
+  // New sheets get an initial auto-fit once; later width changes only via Verify/Fix.
+  reconcileRegistrySheet(sheet, { mode: "full", resizeWidths: true });
 }
 
 function ensureHeadersAndFormatting(sheet) {
-  ensureRegistryHeaders(sheet);
-  initializeRegistrySheet(sheet);
+  reconcileRegistrySheet(sheet, { mode: "full", resizeWidths: false });
 }
 
 function getRegistrySpreadsheet() {
@@ -1250,17 +1442,35 @@ function updateRuleStats(sheet, rowNumber, ruleDryRun, oldItemsCount, protectedK
   const removedCount = ruleDryRun ? 0 : oldItemsCount;
   const wouldDeleteCount = ruleDryRun ? oldItemsCount : 0;
 
-  const totalCell = sheet.getRange(rowNumber, COL.TOTAL_REMOVED);
-  const currentTotal = Number(totalCell.getValue() || 0);
-
   sheet.getRange(rowNumber, COL.LAST_CHECKED).setValue(now);
-  sheet.getRange(rowNumber, COL.LAST_REMOVED).setValue(removedCount);
+  // Only overwrite Last Removed when this run actually deleted something,
+  // so quiet runs don't wipe the previous non-zero deletion count.
+  if (removedCount > 0) {
+    sheet.getRange(rowNumber, COL.LAST_REMOVED).setValue(removedCount);
+  } else if (ruleDryRun) {
+    sheet.getRange(rowNumber, COL.LAST_REMOVED).setValue(0);
+  }
   sheet.getRange(rowNumber, COL.WOULD_DELETE).setValue(wouldDeleteCount);
   sheet.getRange(rowNumber, COL.PROTECTED_KEPT).setValue(protectedKeptCount);
   sheet.getRange(rowNumber, COL.LAST_EMAIL_SEEN).setValue(lastEmailSeen || "");
   sheet.getRange(rowNumber, COL.LAST_BATCH).setValue(batchLabel || "");
 
-  totalCell.setValue(currentTotal + removedCount);
+  // Lifetime total: only add; never rewrite the cell on zero-delete runs.
+  if (removedCount > 0) {
+    const totalCell = sheet.getRange(rowNumber, COL.TOTAL_REMOVED);
+    const currentTotal = readLifetimeCount(totalCell.getValue());
+    totalCell.setValue(currentTotal + removedCount);
+  }
+}
+
+function readLifetimeCount(value) {
+  if (typeof value === "number" && isFinite(value) && value >= 0) return Math.floor(value);
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
+  }
+  // Boolean/blank/corrupted checkbox leftovers must not wipe a lifetime total.
+  return 0;
 }
 
 /***************
@@ -1273,6 +1483,7 @@ const LEGACY_TEST_SHEET_PREFIX = "TEST_Row_";
 function writeTestSheet(ss, mainSheet, rule, keptItems, oldItems) {
   const testSheetName = makeTestSheetName(rule);
   let testSheet = ss.getSheetByName(testSheetName);
+  const isNew = !testSheet;
 
   if (!testSheet) {
     testSheet = ss.insertSheet(testSheetName);
@@ -1325,6 +1536,10 @@ function writeTestSheet(ss, mainSheet, rule, keptItems, oldItems) {
   testSheet.getRange(1, 1, 1, 9).setFontWeight("bold");
   testSheet.autoResizeColumns(1, 9);
   applyTestSheetConditionalFormatting(testSheet, rows.length);
+
+  if (isNew) {
+    applyLightAlternatingColorsToSheet(testSheet);
+  }
 
   setRegistryTestSheetLink(mainSheet, rule.rowNumber, ss, testSheetName);
 }
@@ -1853,7 +2068,7 @@ function showHelp() {
     <h2>Spreadsheet</h2>
     <ul>
       <li><strong>View Settings</strong> opens the settings dashboard</li>
-      <li><strong>Verify/Fix Registry</strong> repairs headers, formats, validations, and links</li>
+      <li><strong>Verify/Fix Registry</strong> reconciles headers, formats, checkboxes, widths, and Gmail links from the column schema</li>
     </ul>
   `).setWidth(520).setHeight(540);
 

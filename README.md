@@ -276,8 +276,8 @@ The registry updates automatically every time AutoClean runs.
 | Test | Preview only |
 | Keep Unread | When checked, unread mail from this sender is never deleted (default **ON** for new senders) |
 | Last Checked | Last time this sender was processed |
-| Last Removed | Emails removed last run |
-| Total Removed | Lifetime deleted |
+| Last Removed | Emails removed on the last live run that deleted something (quiet runs leave this unchanged) |
+| Total Removed | Lifetime deleted (only increases; never reset by later runs) |
 | Would Delete | Preview count |
 | Protected Kept | Starred, AutoClean/Keep, and unread (when **Keep Unread** is on) |
 | Test Sheet | Clickable link to the sender's `TEST_*` preview worksheet (set after the first test run) |
@@ -292,7 +292,7 @@ The registry updates automatically every time AutoClean runs.
 
 - Do not duplicate sender rows — duplicates are skipped and noted in the **Notes** column
 - Do not delete rows — set **Active** to false instead to pause a sender
-- Use **AutoClean → Verify/Fix Registry** to check headers, column formats, row validations, and Gmail Search links
+- Use **AutoClean → Verify/Fix Registry** to reconcile headers, formats, checkboxes, dropdowns, and Gmail Search formulas; it also auto-fits column widths. Cleanup / Learn leave your manual column widths alone.
 
 ---
 
