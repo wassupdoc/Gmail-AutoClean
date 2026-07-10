@@ -20,7 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  ***************/
 
-const SCRIPT_VERSION = "20260708-3";
+const SCRIPT_VERSION = "20260710-1";
 const SCRIPT_REPOSITORY_URL = "https://github.com/wassupdoc/Gmail-AutoClean";
 
 const GLOBAL_DRY_RUN = false; // Developer-only safety switch; not shown in the UI (use Menu Dry Run)
@@ -154,7 +154,20 @@ function onEdit(e) {
   const row = e.range.getRow();
   const col = e.range.getColumn();
 
-  if (row < 2 || col !== COL.ACTIVE) return;
+  if (row < 2) return;
+
+  if (col === COL.SENDER) {
+    const sender = String(e.range.getValue() || "").trim();
+    if (sender) {
+      setRegistrySenderFormula(sheet, row, sender);
+    } else {
+      e.range.clearContent();
+    }
+    setRegistryGmailSearchFormula(sheet, row);
+    return;
+  }
+
+  if (col !== COL.ACTIVE) return;
 
   const activeValue = getCheckboxEditValue(e);
   const testCell = sheet.getRange(row, COL.TEST);
@@ -666,6 +679,7 @@ function addSenderRow(sheet, sender, active, test, notes) {
   ]]);
 
   applyRegistryRowFormatting(sheet, row);
+  setRegistrySenderFormula(sheet, row, sender);
   setRegistryGmailSearchFormula(sheet, row);
 }
 
@@ -710,7 +724,7 @@ function ensureRegistryLayoutMaintenance(sheet) {
  */
 function getRegistrySchema() {
   return [
-    { col: COL.SENDER, header: "Sender", type: "text", maxWidth: 280 },
+    { col: COL.SENDER, header: "Sender", type: "formula", maxWidth: 280 },
     { col: COL.MODE, header: "Mode", type: "list", listValues: ["count", "days"] },
     { col: COL.VALUE, header: "Value", type: "positiveNumber" },
     { col: COL.ACTIVE, header: "Active", type: "checkbox" },
@@ -1052,7 +1066,7 @@ function verifyFixRegistryFromMenu() {
 
   lines.push("Validations: applied from schema");
   lines.push(report.widthsApplied ? "Column widths: auto-fitted to content" : "Column widths: left unchanged");
-  lines.push("Gmail Search formulas: ensured");
+  lines.push("Sender + Gmail Search links: ensured");
 
   report.notes.forEach(note => {
     lines.push("");
@@ -1244,6 +1258,24 @@ function makeGmailSenderSearchUrl(sender) {
   return `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(makeGmailSenderSearchQuery(sender))}`;
 }
 
+function setRegistrySenderFormula(sheet, row, senderOpt) {
+  const sender = senderOpt !== undefined
+    ? String(senderOpt || "").trim()
+    : String(sheet.getRange(row, COL.SENDER).getValue() || "").trim();
+  const cell = sheet.getRange(row, COL.SENDER);
+
+  if (!sender) {
+    cell.clearContent();
+    return;
+  }
+
+  const url = makeGmailSenderSearchUrl(sender);
+  const formula =
+    `=HYPERLINK("${escapeFormulaString(url)}", "${escapeFormulaString(sender)}")`;
+
+  cell.setFormula(formula);
+}
+
 function setRegistryGmailSearchFormula(sheet, row) {
   const senderCell = `A${row}`;
   const formula =
@@ -1257,6 +1289,7 @@ function ensureRegistryGmailSearchLinks(sheet) {
   if (lastDataRow < 2) return;
 
   for (let row = 2; row <= lastDataRow; row++) {
+    setRegistrySenderFormula(sheet, row);
     setRegistryGmailSearchFormula(sheet, row);
   }
 }

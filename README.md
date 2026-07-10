@@ -269,7 +269,7 @@ The registry updates automatically every time AutoClean runs.
 
 | Column | Description |
 |---------|-------------|
-| Sender | Email address |
+| Sender | Clickable email address — opens the same Gmail search as **Gmail Search** (`from:… -in:trash -in:spam`) |
 | Mode | count or days |
 | Value | Number of emails or days |
 | Active | Enable cleanup |
@@ -292,7 +292,7 @@ The registry updates automatically every time AutoClean runs.
 
 - Do not duplicate sender rows — duplicates are skipped and noted in the **Notes** column
 - Do not delete rows — set **Active** to false instead to pause a sender
-- Use **AutoClean → Verify/Fix Registry** to reconcile headers, formats, checkboxes, dropdowns, and Gmail Search formulas; it also auto-fits column widths. Cleanup / Learn leave your manual column widths alone.
+- Use **AutoClean → Verify/Fix Registry** to reconcile headers, formats, checkboxes, dropdowns, and Sender/Gmail Search links; it also auto-fits column widths. Cleanup / Learn leave your manual column widths alone.
 
 ---
 
