@@ -20,7 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  ***************/
 
-const SCRIPT_VERSION = "20260710-1";
+const SCRIPT_VERSION = "20260711-1";
 const SCRIPT_REPOSITORY_URL = "https://github.com/wassupdoc/Gmail-AutoClean";
 
 const GLOBAL_DRY_RUN = false; // Developer-only safety switch; not shown in the UI (use Menu Dry Run)
@@ -53,6 +53,7 @@ const PROP_BATCH_SIZE = "AUTO_CLEAN_BATCH_SIZE";
 const PROP_NEXT_BATCH_INDEX = "AUTO_CLEAN_NEXT_BATCH_INDEX";
 const PROP_LAST_RUN = "AUTO_CLEAN_LAST_RUN";
 const PROP_LAST_BATCH = "AUTO_CLEAN_LAST_BATCH";
+const LIFETIME_TOTAL_PROP_PREFIX = "AUTO_CLEAN_LIFETIME_TOTAL_";
 
 const COL = {
   SENDER: 1,
@@ -767,6 +768,8 @@ function reconcileRegistrySheet(sheet, options) {
     migrated: false,
     healedKeepUnread: 0,
     healedStatColumns: 0,
+    healedNumericStats: 0,
+    syncedLifetimeTotals: 0,
     formatsFixed: 0,
     validationsApplied: false,
     widthsApplied: false,
@@ -795,6 +798,16 @@ function reconcileRegistrySheet(sheet, options) {
   report.healedKeepUnread = healKeepUnreadColumn(sheet);
   if (report.healedKeepUnread) {
     report.notes.push("Restored Keep Unread checkboxes (moved stray dates to Last Checked when blank).");
+  }
+
+  report.healedNumericStats = healNumericStatColumns(sheet);
+  if (report.healedNumericStats) {
+    report.notes.push("Repaired numeric stat columns (date/checkbox corruption).");
+  }
+
+  report.syncedLifetimeTotals = syncLifetimeTotalsWithSheet(sheet);
+  if (report.syncedLifetimeTotals) {
+    report.notes.push("Synced Total Removed with stored lifetime totals.");
   }
 
   ensureRegistryHeaderRow(sheet);
@@ -1490,20 +1503,150 @@ function updateRuleStats(sheet, rowNumber, ruleDryRun, oldItemsCount, protectedK
 
   // Lifetime total: only add; never rewrite the cell on zero-delete runs.
   if (removedCount > 0) {
+    const sender = String(sheet.getRange(rowNumber, COL.SENDER).getValue() || "").trim();
     const totalCell = sheet.getRange(rowNumber, COL.TOTAL_REMOVED);
-    const currentTotal = readLifetimeCount(totalCell.getValue());
-    totalCell.setValue(currentTotal + removedCount);
+    totalCell.setNumberFormat("0");
+    const currentTotal = readLifetimeTotal(sheet, rowNumber, sender);
+    const newTotal = currentTotal + removedCount;
+    totalCell.setValue(newTotal);
+    if (sender) writeStoredLifetimeTotal(sender, newTotal);
   }
 }
 
-function readLifetimeCount(value) {
-  if (typeof value === "number" && isFinite(value) && value >= 0) return Math.floor(value);
+function statNumberColumns() {
+  return [COL.LAST_REMOVED, COL.TOTAL_REMOVED, COL.WOULD_DELETE, COL.PROTECTED_KEPT];
+}
+
+function sheetsDateTimeToSerial(date) {
+  const epoch = new Date(1899, 11, 30);
+  const msPerDay = 24 * 60 * 60 * 1000;
+  return Math.round((date.getTime() - epoch.getTime()) / msPerDay);
+}
+
+function normalizeStatNumberValue(value) {
+  if (typeof value === "number" && isFinite(value) && value >= 0) {
+    return Math.floor(value);
+  }
+
+  if (value === true || value === false) return 0;
+
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    const serial = sheetsDateTimeToSerial(value);
+    if (serial >= 0 && serial <= 10000000) return Math.floor(serial);
+    return 0;
+  }
+
   if (typeof value === "string" && value.trim() !== "") {
-    const parsed = Number(value);
+    const parsed = Number(value.replace(/,/g, ""));
     if (isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
   }
-  // Boolean/blank/corrupted checkbox leftovers must not wipe a lifetime total.
+
   return 0;
+}
+
+function readLifetimeCountFromCell(cell) {
+  const normalized = normalizeStatNumberValue(cell.getValue());
+  if (normalized > 0) return normalized;
+
+  const display = String(cell.getDisplayValue() || "").replace(/,/g, "").trim();
+  if (display !== "") {
+    const parsed = Number(display);
+    if (isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
+  }
+
+  return 0;
+}
+
+function lifetimeTotalPropertyKey(sender) {
+  return LIFETIME_TOTAL_PROP_PREFIX + makeSenderSlug(sender);
+}
+
+function readStoredLifetimeTotal(sender) {
+  const raw = PropertiesService.getScriptProperties().getProperty(lifetimeTotalPropertyKey(sender));
+  if (raw === null || raw === "") return 0;
+  return normalizeStatNumberValue(raw);
+}
+
+function writeStoredLifetimeTotal(sender, total) {
+  PropertiesService.getScriptProperties().setProperty(
+    lifetimeTotalPropertyKey(sender),
+    String(Math.max(0, Math.floor(total)))
+  );
+}
+
+function readLifetimeTotal(sheet, rowNumber, sender) {
+  const cell = sheet.getRange(rowNumber, COL.TOTAL_REMOVED);
+  return Math.max(readLifetimeCountFromCell(cell), readStoredLifetimeTotal(sender));
+}
+
+function healNumericStatColumns(sheet) {
+  const lastDataRow = getRegistryLastDataRow(sheet);
+  if (lastDataRow < 2) return 0;
+
+  let repairedColumns = 0;
+
+  statNumberColumns().forEach(column => {
+    const range = getRegistryColumnRange(sheet, column, lastDataRow);
+    const values = range.getValues();
+    let changed = false;
+
+    const repairedValues = values.map(row => {
+      const value = row[0];
+      const normalized = normalizeStatNumberValue(value);
+
+      if (value instanceof Date || value === true || value === false) {
+        changed = true;
+      } else if (typeof value === "number" && normalized !== value) {
+        changed = true;
+      } else if (value !== "" && value !== null && normalized !== value) {
+        changed = true;
+      }
+
+      return [normalized];
+    });
+
+    const sampleFormat = sheet.getRange(2, column).getNumberFormat();
+    const needsFormat = !registryFormatMatches("number", sampleFormat);
+
+    if (changed || needsFormat) {
+      range.clearDataValidations();
+      range.setNumberFormat("0");
+      if (changed) range.setValues(repairedValues);
+      repairedColumns++;
+    }
+  });
+
+  return repairedColumns;
+}
+
+function syncLifetimeTotalsWithSheet(sheet) {
+  const lastDataRow = getRegistryLastDataRow(sheet);
+  if (lastDataRow < 2) return 0;
+
+  let synced = 0;
+
+  for (let row = 2; row <= lastDataRow; row++) {
+    const sender = String(sheet.getRange(row, COL.SENDER).getValue() || "").trim();
+    if (!sender) continue;
+
+    const cell = sheet.getRange(row, COL.TOTAL_REMOVED);
+    cell.setNumberFormat("0");
+
+    const fromCell = readLifetimeCountFromCell(cell);
+    const fromProps = readStoredLifetimeTotal(sender);
+    const merged = Math.max(fromCell, fromProps);
+
+    if (merged !== fromCell) {
+      cell.setValue(merged);
+      synced++;
+    }
+
+    if (merged !== fromProps) {
+      writeStoredLifetimeTotal(sender, merged);
+    }
+  }
+
+  return synced;
 }
 
 /***************
