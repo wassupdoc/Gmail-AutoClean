@@ -292,7 +292,7 @@ The registry updates automatically every time AutoClean runs.
 
 - Do not duplicate sender rows — duplicates are skipped and noted in the **Notes** column
 - Do not delete rows — set **Active** to false instead to pause a sender
-- Use **AutoClean → Verify/Fix Registry** to reconcile headers, formats, checkboxes, dropdowns, and Sender/Gmail Search links; it also auto-fits column widths. Cleanup / Learn leave your manual column widths alone.
+- Use **AutoClean → Verify/Fix Registry** for a full reconcile (links, trim, width auto-fit). Normal cleanup re-applies column formats and Mode/Value validations, and only heals checkbox columns when a probe detects corruption (preserving TRUE/FALSE).
 
 ---
 

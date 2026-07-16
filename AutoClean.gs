@@ -20,7 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  ***************/
 
-const SCRIPT_VERSION = "20260711-1";
+const SCRIPT_VERSION = "20260715-3";
 const SCRIPT_REPOSITORY_URL = "https://github.com/wassupdoc/Gmail-AutoClean";
 
 const GLOBAL_DRY_RUN = false; // Developer-only safety switch; not shown in the UI (use Menu Dry Run)
@@ -192,12 +192,12 @@ function getCheckboxEditValue(e) {
 }
 
 function isCheckboxTrue(value) {
+  if (isSheetsEpochDate(value)) return false;
   return value === true || String(value).toLowerCase() === "true";
 }
 
 function setCheckboxValue(cell, checked) {
-  cell.insertCheckboxes();
-  cell.setValue(checked);
+  applyCheckboxCell(cell, checked);
 }
 
 /***************
@@ -753,11 +753,18 @@ function getRegistryHeaders() {
 /**
  * Reconcile registry layout against getRegistrySchema().
  *
- * mode "light" (cleanup / Learn / open): migrations + heal corruption + headers
- * mode "full" (Verify/Fix): also formats, validations, Gmail formulas, trim
+ * light (cleanup / Learn / open):
+ *   - migrations + targeted heals
+ *   - column formats (no value rewrites)
+ *   - Mode / Value validations only
+ *   - probe checkbox columns; heal only if corrupted (preserve booleans)
  *
- * Column widths are only changed when resizeWidths is true (Verify/Fix menu),
- * so user-adjusted widths are left alone during normal runs.
+ * full (Verify/Fix):
+ *   - everything in light
+ *   - Sender / Gmail Search links, trim blank rows
+ *   - optional width auto-fit when resizeWidths is true
+ *
+ * Total Removed is never rewritten here — only incremented on live deletes.
  */
 function reconcileRegistrySheet(sheet, options) {
   const opts = options || {};
@@ -767,6 +774,7 @@ function reconcileRegistrySheet(sheet, options) {
     mode,
     migrated: false,
     healedKeepUnread: 0,
+    healedCheckboxColumns: 0,
     healedStatColumns: 0,
     healedNumericStats: 0,
     syncedLifetimeTotals: 0,
@@ -795,9 +803,22 @@ function reconcileRegistrySheet(sheet, options) {
     report.notes.push("Cleared checkbox corruption from numeric/date columns.");
   }
 
-  report.healedKeepUnread = healKeepUnreadColumn(sheet);
+  report.healedKeepUnread = healKeepUnreadMisplacedDates(sheet);
   if (report.healedKeepUnread) {
-    report.notes.push("Restored Keep Unread checkboxes (moved stray dates to Last Checked when blank).");
+    report.notes.push("Moved misplaced dates from Keep Unread to Last Checked.");
+  }
+
+  // Formats first so probes see the intended column contract after soft drift.
+  report.formatMismatchesBefore = getRegistryFormatMismatches(sheet);
+  report.formatsFixed = applyRegistrySchemaFormats(sheet);
+
+  // Mode / Value only — never rewrite checkbox cell values on a healthy sheet.
+  applyRegistryInputValidations(sheet);
+  report.validationsApplied = true;
+
+  report.healedCheckboxColumns = healRegistryCheckboxColumnsIfNeeded(sheet);
+  if (report.healedCheckboxColumns) {
+    report.notes.push("Healed corrupted checkbox column(s); preserved TRUE/FALSE values.");
   }
 
   report.healedNumericStats = healNumericStatColumns(sheet);
@@ -814,10 +835,6 @@ function reconcileRegistrySheet(sheet, options) {
   report.headerMismatches = getRegistryHeaderMismatches(sheet);
 
   if (mode === "full") {
-    report.formatMismatchesBefore = getRegistryFormatMismatches(sheet);
-    report.formatsFixed = applyRegistrySchemaFormats(sheet);
-    applyRegistrySchemaValidations(sheet);
-    report.validationsApplied = true;
     ensureRegistryGmailSearchLinks(sheet);
     report.gmailLinksEnsured = true;
     report.trimmedRows = trimRegistryTrailingRows(sheet);
@@ -862,6 +879,8 @@ function migrateAddKeepUnreadColumn(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow >= 2) {
     const range = getRegistryColumnRange(sheet, COL.KEEP_UNREAD, lastRow);
+    range.clearDataValidations();
+    range.setNumberFormat("@");
     range.insertCheckboxes();
     range.setValue(true);
   }
@@ -883,6 +902,25 @@ function columnHasCheckboxValidation(sheet, row, column) {
 
 function isDateValue(value) {
   return value instanceof Date && !isNaN(value.getTime());
+}
+
+// Unchecked checkbox FALSE with a date format displays as 12/30/1899 (Sheets serial 0).
+function isSheetsEpochDate(value) {
+  if (!(value instanceof Date) || isNaN(value.getTime())) return false;
+  return value.getFullYear() === 1899 && value.getMonth() === 11 && value.getDate() === 30;
+}
+
+function isDateLikeNumberFormat(format) {
+  const actual = String(format || "").trim().toLowerCase();
+  if (!actual || actual === "general" || actual === "@" || actual === "0") return false;
+  return actual.includes("y") || actual.includes("d") || actual.includes("m") || actual.includes("h");
+}
+
+function applyCheckboxCell(cell, checked) {
+  cell.clearDataValidations();
+  cell.setNumberFormat("@");
+  cell.insertCheckboxes();
+  cell.setValue(!!checked);
 }
 
 function healCheckboxCorruptionOnStatColumns(sheet) {
@@ -919,7 +957,7 @@ function healCheckboxCorruptionOnStatColumns(sheet) {
   return statColumns.length;
 }
 
-function healKeepUnreadColumn(sheet) {
+function healKeepUnreadMisplacedDates(sheet) {
   const header = String(sheet.getRange(1, COL.KEEP_UNREAD).getValue() || "").trim();
   if (header !== "Keep Unread") return 0;
 
@@ -932,46 +970,93 @@ function healKeepUnreadColumn(sheet) {
   const checkedValues = checkedRange.getValues();
 
   let movedDates = 0;
-  let needsCheckboxRestore = !columnHasCheckboxValidation(sheet, 2, COL.KEEP_UNREAD);
 
   for (let i = 0; i < keepValues.length; i++) {
     const keepValue = keepValues[i][0];
     const checkedValue = checkedValues[i][0];
 
-    if (isDateValue(keepValue)) {
-      if (!isDateValue(checkedValue) && (checkedValue === "" || checkedValue === null)) {
-        checkedValues[i][0] = keepValue;
-      }
-      keepValues[i][0] = true;
-      movedDates++;
-      needsCheckboxRestore = true;
-      continue;
+    // Epoch / FALSE-as-date is handled by healRegistryCheckboxColumnsIfNeeded.
+    if (!isDateValue(keepValue) || isSheetsEpochDate(keepValue)) continue;
+
+    if (!isDateValue(checkedValue) && (checkedValue === "" || checkedValue === null)) {
+      checkedValues[i][0] = keepValue;
     }
-
-    if (keepValue === true || keepValue === false) continue;
-
     keepValues[i][0] = true;
-    needsCheckboxRestore = true;
+    movedDates++;
   }
 
-  if (!movedDates && !needsCheckboxRestore) return 0;
+  if (!movedDates) return 0;
 
-  keepRange.clearDataValidations();
   keepRange.setNumberFormat("@");
   keepRange.setValues(keepValues);
-  keepRange.insertCheckboxes();
+  checkedRange.setValues(checkedValues);
+  applyRegistrySchemaFormats(sheet);
 
-  if (movedDates > 0) {
-    checkedRange.setValues(checkedValues);
-    applyRegistrySchemaFormats(sheet);
+  Logger.log(`Moved ${movedDates} misplaced date(s) from Keep Unread to Last Checked.`);
+  return movedDates;
+}
+
+function checkboxColumnNeedsHeal(sheet, column, lastDataRow) {
+  if (!columnHasCheckboxValidation(sheet, 2, column.col)) return true;
+  if (isDateLikeNumberFormat(sheet.getRange(2, column.col).getNumberFormat())) return true;
+
+  const range = getRegistryColumnRange(sheet, column.col, lastDataRow);
+  const formats = range.getNumberFormats();
+  const values = range.getValues();
+
+  for (let i = 0; i < formats.length; i++) {
+    if (isDateLikeNumberFormat(formats[i][0])) return true;
+
+    const value = values[i][0];
+    if (isSheetsEpochDate(value)) return true;
+    if (isDateValue(value)) return true;
+    if (value !== true && value !== false && value !== "" && value !== null) return true;
   }
 
-  Logger.log(
-    movedDates
-      ? `Healed Keep Unread: restored checkboxes and moved ${movedDates} date value(s) to Last Checked.`
-      : "Healed Keep Unread: restored checkboxes."
-  );
-  return movedDates || 1;
+  return false;
+}
+
+/**
+ * Probe checkbox columns; only rewrite when corrupted.
+ * Preserves existing TRUE/FALSE. Epoch dates become FALSE.
+ * Real misplaced dates should already be handled by healKeepUnreadMisplacedDates.
+ */
+function healRegistryCheckboxColumnsIfNeeded(sheet) {
+  const lastDataRow = getRegistryLastDataRow(sheet);
+  if (lastDataRow < 2) return 0;
+
+  let healed = 0;
+
+  getRegistrySchema().forEach(column => {
+    if (column.type !== "checkbox") return;
+    if (!checkboxColumnNeedsHeal(sheet, column, lastDataRow)) return;
+
+    const range = getRegistryColumnRange(sheet, column.col, lastDataRow);
+    const values = range.getValues();
+
+    const preservedValues = values.map(row => {
+      const value = row[0];
+
+      if (value === true || value === false) return [value];
+      if (isSheetsEpochDate(value)) return [false];
+      if (isDateValue(value)) return [column.checkboxDefault === true];
+      if (value === "" || value === null) return [column.checkboxDefault === true];
+      return [isCheckboxTrue(value)];
+    });
+
+    range.clearDataValidations();
+    range.setNumberFormat("@");
+    range.setValues(preservedValues);
+    range.insertCheckboxes();
+    getRegistryOpenColumnRange(sheet, column.col).setNumberFormat("@");
+    healed++;
+  });
+
+  if (healed) {
+    Logger.log(`Healed ${healed} checkbox column(s) after probe detected corruption.`);
+  }
+
+  return healed;
 }
 
 function registryHeadersValid(sheet) {
@@ -1077,9 +1162,12 @@ function verifyFixRegistryFromMenu() {
     lines.push("Column formats: OK (schema applied)");
   }
 
-  lines.push("Validations: applied from schema");
+  lines.push("Input validations: Mode/Value applied column-wide");
+  lines.push(report.healedCheckboxColumns
+    ? `Checkbox columns: healed ${report.healedCheckboxColumns} (probe failed)`
+    : "Checkbox columns: OK (probe passed, values untouched)");
   lines.push(report.widthsApplied ? "Column widths: auto-fitted to content" : "Column widths: left unchanged");
-  lines.push("Sender + Gmail Search links: ensured");
+  lines.push(report.gmailLinksEnsured ? "Sender + Gmail Search links: ensured" : "Sender + Gmail Search links: skipped (light mode)");
 
   report.notes.forEach(note => {
     lines.push("");
@@ -1151,13 +1239,19 @@ function registryFormatPattern(type) {
   if (type === "datetime") return "m/d/yyyy h:mm:ss";
   if (type === "date") return "m/d/yyyy";
   if (type === "number" || type === "positiveNumber") return "0";
+  // text, formula, checkbox, list
   return "@";
 }
 
 function registryFormatMatches(type, format) {
   const actual = String(format || "").trim().toLowerCase();
 
-  if (type === "text" || type === "checkbox" || type === "list" || type === "formula") {
+  if (type === "checkbox") {
+    // Checkbox columns must not use date/time formats (FALSE → 12/30/1899).
+    return !isDateLikeNumberFormat(format);
+  }
+
+  if (type === "text" || type === "list" || type === "formula") {
     return actual === "" || actual === "general" || actual.startsWith("@");
   }
 
@@ -1177,7 +1271,7 @@ function getRegistryFormatMismatches(sheet) {
   const mismatches = [];
 
   getRegistrySchema().forEach(column => {
-    if (column.type === "checkbox" || column.type === "list") return;
+    if (column.type === "list") return;
 
     const format = sheet.getRange(sampleRow, column.col).getNumberFormat();
 
@@ -1209,14 +1303,20 @@ function getRegistryLastDataRow(sheet) {
   return lastDataRow;
 }
 
+function getRegistryOpenColumnRange(sheet, column) {
+  const letter = columnNumberToLetter(column);
+  return sheet.getRange(`${letter}2:${letter}`);
+}
+
+/**
+ * Apply number formats to entire columns (from row 2). Does not rewrite values.
+ * Open ranges mean newly added rows inherit the correct format.
+ */
 function applyRegistrySchemaFormats(sheet) {
   let fixed = 0;
 
   getRegistrySchema().forEach(column => {
-    if (column.type === "checkbox") return;
-
-    const letter = columnNumberToLetter(column.col);
-    const range = sheet.getRange(`${letter}2:${letter}`);
+    const range = getRegistryOpenColumnRange(sheet, column.col);
     const before = sheet.getRange(2, column.col).getNumberFormat();
     const pattern = registryFormatPattern(column.type);
 
@@ -1228,13 +1328,29 @@ function applyRegistrySchemaFormats(sheet) {
   return fixed;
 }
 
-function applyRegistrySchemaValidations(sheet) {
-  const lastDataRow = getRegistryLastDataRow(sheet);
-  if (lastDataRow < 2) return;
+/**
+ * Apply Mode / Value (and similar) input validations column-wide.
+ * Does not touch checkbox columns — those are probe/heal only.
+ */
+function applyRegistryInputValidations(sheet) {
+  getRegistrySchema().forEach(column => {
+    if (column.type === "list" && column.listValues) {
+      const rule = SpreadsheetApp.newDataValidation()
+        .requireValueInList(column.listValues, true)
+        .setAllowInvalid(false)
+        .build();
+      getRegistryOpenColumnRange(sheet, column.col).setDataValidation(rule);
+      return;
+    }
 
-  for (let row = 2; row <= lastDataRow; row++) {
-    applyRegistryRowFormatting(sheet, row);
-  }
+    if (column.type === "positiveNumber") {
+      const rule = SpreadsheetApp.newDataValidation()
+        .requireNumberGreaterThan(0)
+        .setAllowInvalid(false)
+        .build();
+      getRegistryOpenColumnRange(sheet, column.col).setDataValidation(rule);
+    }
+  });
 }
 
 function applyRegistrySchemaWidths(sheet) {
@@ -1308,29 +1424,15 @@ function ensureRegistryGmailSearchLinks(sheet) {
 }
 
 function applyRegistryRowFormatting(sheet, row) {
+  // New rows only — column-wide schema already covers formats/validations.
   getRegistrySchema().forEach(column => {
     const cell = sheet.getRange(row, column.col);
 
     if (column.type === "checkbox") {
-      cell.insertCheckboxes();
-      return;
-    }
-
-    if (column.type === "list" && column.listValues) {
-      const rule = SpreadsheetApp.newDataValidation()
-        .requireValueInList(column.listValues, true)
-        .setAllowInvalid(false)
-        .build();
-      cell.setDataValidation(rule);
-      return;
-    }
-
-    if (column.type === "positiveNumber") {
-      const rule = SpreadsheetApp.newDataValidation()
-        .requireNumberGreaterThan(0)
-        .setAllowInvalid(false)
-        .build();
-      cell.setDataValidation(rule);
+      const current = cell.getValue();
+      const checked = isCheckboxTrue(current) ||
+        ((current === "" || current === null) && column.checkboxDefault === true);
+      applyCheckboxCell(cell, checked);
     }
   });
 }
