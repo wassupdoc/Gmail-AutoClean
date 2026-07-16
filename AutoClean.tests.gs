@@ -13,7 +13,9 @@ function runSelfTests() {
     test_healTextRegistryValue_clearsDateText,
     test_getRegistryColumnRange_usesLastDataRowCount,
     test_updateRuleStats_dryRun_doesNotIncrementLifetimeTotal,
-    test_updateRuleStats_liveRun_incrementsLifetimeTotal
+    test_updateRuleStats_liveRun_incrementsLifetimeTotal,
+    test_syncLifetimeTotalsWithSheet_usesMaxNeverDecreases,
+    test_reconcileRegistrySheet_reportsRepairNotesAndFullActions
   ];
 
   const failures = [];
@@ -151,6 +153,104 @@ function test_updateRuleStats_liveRun_incrementsLifetimeTotal() {
   } finally {
     readLifetimeTotal = originalReadLifetimeTotal;
     writeStoredLifetimeTotal = originalWriteStoredLifetimeTotal;
+  }
+}
+
+function test_syncLifetimeTotalsWithSheet_usesMaxNeverDecreases() {
+  const fake = makeFakeSheet();
+  fake.setValue(2, COL.SENDER, "a@example.com");
+  fake.setValue(2, COL.TOTAL_REMOVED, 10);
+  fake.setValue(3, COL.SENDER, "b@example.com");
+  fake.setValue(3, COL.TOTAL_REMOVED, 2);
+
+  const originalGetRegistryLastDataRow = getRegistryLastDataRow;
+  const originalReadStoredLifetimeTotal = readStoredLifetimeTotal;
+  const originalWriteStoredLifetimeTotal = writeStoredLifetimeTotal;
+  const writes = {};
+
+  getRegistryLastDataRow = () => 3;
+  readStoredLifetimeTotal = sender => sender === "a@example.com" ? 7 : 9;
+  writeStoredLifetimeTotal = (sender, total) => { writes[sender] = total; };
+
+  try {
+    const synced = syncLifetimeTotalsWithSheet(fake);
+    assertEq(synced, 1, "Only one row should need sheet sync");
+    assertEq(fake.getValue(2, COL.TOTAL_REMOVED), 10, "Higher sheet value must be preserved");
+    assertEq(fake.getValue(3, COL.TOTAL_REMOVED), 9, "Lower sheet value must be raised to property max");
+    assertEq(writes["a@example.com"], 10, "Property should be raised to preserved max");
+    assertEq(writes["b@example.com"], undefined, "Property already max should not be rewritten");
+  } finally {
+    getRegistryLastDataRow = originalGetRegistryLastDataRow;
+    readStoredLifetimeTotal = originalReadStoredLifetimeTotal;
+    writeStoredLifetimeTotal = originalWriteStoredLifetimeTotal;
+  }
+}
+
+function test_reconcileRegistrySheet_reportsRepairNotesAndFullActions() {
+  const sheet = {};
+  const calls = [];
+
+  const originals = {
+    migrateRemoveLastCleanupColumn,
+    migrateAddKeepUnreadColumn,
+    healMisplacedRegistryValues,
+    healKeepUnreadMisplacedDates,
+    getRegistryFormatMismatches,
+    applyRegistrySchemaFormats,
+    applyRegistryInputValidations,
+    healRegistryCheckboxColumnsIfNeeded,
+    healNumericStatColumns,
+    syncLifetimeTotalsWithSheet,
+    ensureRegistryHeaderRow,
+    getRegistryHeaderMismatches,
+    ensureRegistryGmailSearchLinks,
+    trimRegistryTrailingRows,
+    applyRegistrySchemaWidths
+  };
+
+  migrateRemoveLastCleanupColumn = () => false;
+  migrateAddKeepUnreadColumn = () => false;
+  healMisplacedRegistryValues = () => ({ datetime: 1, text: 2, stats: 0, testRows: 1 });
+  healKeepUnreadMisplacedDates = () => 0;
+  getRegistryFormatMismatches = () => [];
+  applyRegistrySchemaFormats = () => 0;
+  applyRegistryInputValidations = () => { calls.push("validations"); };
+  healRegistryCheckboxColumnsIfNeeded = () => 0;
+  healNumericStatColumns = () => 0;
+  syncLifetimeTotalsWithSheet = () => 0;
+  ensureRegistryHeaderRow = () => { calls.push("header"); };
+  getRegistryHeaderMismatches = () => [];
+  ensureRegistryGmailSearchLinks = () => { calls.push("gmailLinks"); };
+  trimRegistryTrailingRows = () => 0;
+  applyRegistrySchemaWidths = () => { calls.push("widths"); };
+
+  try {
+    const report = reconcileRegistrySheet(sheet, { mode: "full", resizeWidths: true });
+    assertEq(report.mode, "full", "Mode should be full");
+    assertTrue(report.gmailLinksEnsured, "Full mode should ensure Gmail links");
+    assertTrue(report.widthsApplied, "Requested width apply should be reported");
+    assertTrue(report.notes.some(n => n.includes("date/time columns")), "Datetime repair note should be present");
+    assertTrue(report.notes.some(n => n.includes("text columns")), "Text repair note should be present");
+    assertTrue(report.notes.some(n => n.includes("test-row preview")), "Test-row repair note should be present");
+    assertEq(calls.includes("validations"), true, "Validations should be applied");
+    assertEq(calls.includes("gmailLinks"), true, "Gmail links should be ensured in full mode");
+    assertEq(calls.includes("widths"), true, "Widths should be applied when requested");
+  } finally {
+    migrateRemoveLastCleanupColumn = originals.migrateRemoveLastCleanupColumn;
+    migrateAddKeepUnreadColumn = originals.migrateAddKeepUnreadColumn;
+    healMisplacedRegistryValues = originals.healMisplacedRegistryValues;
+    healKeepUnreadMisplacedDates = originals.healKeepUnreadMisplacedDates;
+    getRegistryFormatMismatches = originals.getRegistryFormatMismatches;
+    applyRegistrySchemaFormats = originals.applyRegistrySchemaFormats;
+    applyRegistryInputValidations = originals.applyRegistryInputValidations;
+    healRegistryCheckboxColumnsIfNeeded = originals.healRegistryCheckboxColumnsIfNeeded;
+    healNumericStatColumns = originals.healNumericStatColumns;
+    syncLifetimeTotalsWithSheet = originals.syncLifetimeTotalsWithSheet;
+    ensureRegistryHeaderRow = originals.ensureRegistryHeaderRow;
+    getRegistryHeaderMismatches = originals.getRegistryHeaderMismatches;
+    ensureRegistryGmailSearchLinks = originals.ensureRegistryGmailSearchLinks;
+    trimRegistryTrailingRows = originals.trimRegistryTrailingRows;
+    applyRegistrySchemaWidths = originals.applyRegistrySchemaWidths;
   }
 }
 
