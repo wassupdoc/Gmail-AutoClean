@@ -20,7 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  ***************/
 
-const SCRIPT_VERSION = "20260716-3";
+const SCRIPT_VERSION = "20260716-4";
 const SCRIPT_REPOSITORY_URL = "https://github.com/wassupdoc/Gmail-AutoClean";
 
 const GLOBAL_DRY_RUN = false; // Developer-only safety switch; not shown in the UI (use Menu Dry Run)
@@ -341,24 +341,13 @@ function runAutoCleanBody(runFull) {
 
         messagesFound++;
 
-        if (message.isStarred()) {
-          item.reason = "KEEP - STARRED";
+        const protectionReason = classifyMessageProtection(message, threadHasKeepLabel, rule.keepUnread);
+        if (protectionReason) {
+          item.reason = protectionReason;
           protectedItems.push(item);
-          messagesSkippedStarred++;
-          return;
-        }
-
-        if (threadHasKeepLabel) {
-          item.reason = "KEEP - AUTOCLEAN KEEP LABEL";
-          protectedItems.push(item);
-          messagesProtectedByKeepLabel++;
-          return;
-        }
-
-        if (rule.keepUnread && message.isUnread()) {
-          item.reason = "KEEP - UNREAD";
-          protectedItems.push(item);
-          messagesSkippedUnread++;
+          if (protectionReason === "KEEP - STARRED") messagesSkippedStarred++;
+          else if (protectionReason === "KEEP - AUTOCLEAN KEEP LABEL") messagesProtectedByKeepLabel++;
+          else if (protectionReason === "KEEP - UNREAD") messagesSkippedUnread++;
           return;
         }
 
@@ -418,11 +407,7 @@ function runAutoCleanBody(runFull) {
       logRuleItems(oldItems);
     }
 
-    oldItems.forEach(item => {
-      if (!ruleDryRun) {
-        item.message.moveToTrash();
-      }
-    });
+    trashEligibleItems(oldItems, ruleDryRun);
 
     if (rule.test || globalDryRun) {
       writeTestSheet(ss, sheet, rule, allKeptItems, oldItems);
@@ -582,25 +567,33 @@ function learnSendersFromLabel(sheet) {
 
   const threads = getAllLabelThreads(learnLabel);
   const existing = getExistingSenders(sheet);
+  const ownEmails = getOwnEmailAddresses();
 
   let added = 0;
   let alreadyExisting = 0;
+  let skippedOwn = 0;
   let labelsRemoved = 0;
 
   threads.forEach(thread => {
-    thread.getMessages().forEach(message => {
-      const sender = normalizeSender(message.getFrom());
+    const sender = getNewestMessageSender(thread);
 
-      if (existing.has(sender)) {
-        alreadyExisting++;
-        return;
-      }
+    if (!sender) {
+      thread.removeLabel(learnLabel);
+      labelsRemoved++;
+      return;
+    }
 
+    if (ownEmails.has(sender)) {
+      skippedOwn++;
+      Logger.log(`Learn skipped own address: ${sender}`);
+    } else if (existing.has(sender)) {
+      alreadyExisting++;
+    } else {
       addSenderRow(sheet, sender, true, true, "");
       existing.add(sender);
       added++;
       Logger.log(`Added sender via Learn: ${sender}`);
-    });
+    }
 
     thread.removeLabel(learnLabel);
     labelsRemoved++;
@@ -608,6 +601,7 @@ function learnSendersFromLabel(sheet) {
 
   Logger.log(`Learn added: ${added}`);
   Logger.log(`Learn already existing skipped: ${alreadyExisting}`);
+  Logger.log(`Learn own-address skipped: ${skippedOwn}`);
   Logger.log(`Learn labels removed: ${labelsRemoved}`);
 }
 
@@ -618,25 +612,33 @@ function learnIgnoredSendersFromLabel(sheet) {
   const ignoredProcessedLabel = getOrCreateLabel(IGNORE_PROCESSED_LABEL_NAME);
   const threads = getAllLabelThreads(ignoreLabel);
   const existing = getExistingSenders(sheet);
+  const ownEmails = getOwnEmailAddresses();
 
   let added = 0;
   let alreadyExisting = 0;
+  let skippedOwn = 0;
   let labelsProcessed = 0;
 
   threads.forEach(thread => {
-    thread.getMessages().forEach(message => {
-      const sender = normalizeSender(message.getFrom());
+    const sender = getNewestMessageSender(thread);
 
-      if (existing.has(sender)) {
-        alreadyExisting++;
-        return;
-      }
+    if (!sender) {
+      markIgnoreThreadProcessed(thread, ignoreLabel, ignoredProcessedLabel);
+      labelsProcessed++;
+      return;
+    }
 
+    if (ownEmails.has(sender)) {
+      skippedOwn++;
+      Logger.log(`Ignore skipped own address: ${sender}`);
+    } else if (existing.has(sender)) {
+      alreadyExisting++;
+    } else {
       addSenderRow(sheet, sender, false, false, "Ignored via AutoClean/Ignore");
       existing.add(sender);
       added++;
       Logger.log(`Added ignored sender: ${sender}`);
-    });
+    }
 
     markIgnoreThreadProcessed(thread, ignoreLabel, ignoredProcessedLabel);
     labelsProcessed++;
@@ -644,6 +646,7 @@ function learnIgnoredSendersFromLabel(sheet) {
 
   Logger.log(`Ignore added: ${added}`);
   Logger.log(`Ignore already existing skipped: ${alreadyExisting}`);
+  Logger.log(`Ignore own-address skipped: ${skippedOwn}`);
   Logger.log(`Ignore labels processed: ${labelsProcessed}`);
 }
 
@@ -1606,7 +1609,8 @@ function getActiveRules(sheet) {
     const keepUnread = values[i][COL.KEEP_UNREAD - 1];
 
     if (!sender) continue;
-    if (active === false || String(active).toLowerCase() === "false") continue;
+    // Fail closed: only an explicit checked Active checkbox is live.
+    if (!isCheckboxTrue(active)) continue;
 
     if (seenSenders.has(sender)) {
       appendDuplicateNote(sheet, rowNumber, seenSenders.get(sender));
@@ -1655,7 +1659,7 @@ function countActiveRules(sheet) {
     const active = values[i][COL.ACTIVE - 1];
 
     if (!sender) continue;
-    if (active === false || String(active).toLowerCase() === "false") continue;
+    if (!isCheckboxTrue(active)) continue;
     if (seenSenders.has(sender)) continue;
     if (mode !== "count" && mode !== "days") continue;
     if (!value || value < 1) continue;
@@ -1767,20 +1771,42 @@ function readLifetimeCountFromCell(cell) {
 }
 
 function lifetimeTotalPropertyKey(sender) {
-  return LIFETIME_TOTAL_PROP_PREFIX + makeSenderSlug(sender);
+  // Independent full-sender hash — not the sheet-name slug (avoids truncation collisions).
+  const normalized = String(sender || "").toLowerCase().trim();
+  return LIFETIME_TOTAL_PROP_PREFIX + "H_" + hashSenderHex(normalized, 16);
+}
+
+function legacyLifetimeTotalPropertyKey(sender) {
+  return LIFETIME_TOTAL_PROP_PREFIX + makeLegacySenderSlug(sender);
 }
 
 function readStoredLifetimeTotal(sender) {
-  const raw = PropertiesService.getScriptProperties().getProperty(lifetimeTotalPropertyKey(sender));
+  const props = PropertiesService.getScriptProperties();
+  const newKey = lifetimeTotalPropertyKey(sender);
+  let raw = props.getProperty(newKey);
+
+  if (raw === null || raw === "") {
+    const legacyKey = legacyLifetimeTotalPropertyKey(sender);
+    raw = props.getProperty(legacyKey);
+    if (raw !== null && raw !== "") {
+      // Migrate once to the collision-resistant key.
+      props.setProperty(newKey, raw);
+      props.deleteProperty(legacyKey);
+    }
+  }
+
   if (raw === null || raw === "") return 0;
   return normalizeStatNumberValue(raw);
 }
 
 function writeStoredLifetimeTotal(sender, total) {
-  PropertiesService.getScriptProperties().setProperty(
-    lifetimeTotalPropertyKey(sender),
-    String(Math.max(0, Math.floor(total)))
-  );
+  const props = PropertiesService.getScriptProperties();
+  const newKey = lifetimeTotalPropertyKey(sender);
+  const legacyKey = legacyLifetimeTotalPropertyKey(sender);
+  props.setProperty(newKey, String(Math.max(0, Math.floor(total))));
+  if (props.getProperty(legacyKey) !== null) {
+    props.deleteProperty(legacyKey);
+  }
 }
 
 function readLifetimeTotal(sheet, rowNumber, sender) {
@@ -2435,6 +2461,7 @@ function showHelp() {
     <ul>
       <li><strong>View Settings</strong> opens the settings dashboard</li>
       <li><strong>Verify/Fix Registry</strong> reconciles headers, formats, checkboxes, widths, and Gmail links from the column schema</li>
+      <li><strong>Run Self Tests</strong> checks high-risk safety contracts without touching Gmail data</li>
     </ul>
   `).setWidth(520).setHeight(540);
 
@@ -2456,6 +2483,30 @@ function cleanupObsoleteTestSheets(sheet) {
   let removed = 0;
   let renamed = 0;
   const sheetsToDelete = [];
+
+  // Migrate legacy collision-prone sheet names to hashed slugs.
+  if (lastRow >= 2) {
+    for (let row = 2; row <= lastRow; row++) {
+      if (!isActiveRow(sheet, row) || !isTestModeEnabled(sheet, row)) continue;
+
+      const sender = String(sheet.getRange(row, COL.SENDER).getValue() || "").toLowerCase().trim();
+      if (!sender) continue;
+
+      const newName = makeTestSheetNameFromSender(sender);
+      const legacyName = makeTestSheetNameFromSlug(makeLegacySenderSlug(sender));
+      if (legacyName === newName) continue;
+
+      const legacySheet = ss.getSheetByName(legacyName);
+      const newSheet = ss.getSheetByName(newName);
+
+      if (legacySheet && !newSheet) {
+        legacySheet.setName(newName);
+        renamed++;
+      } else if (legacySheet && newSheet && legacySheet !== newSheet) {
+        sheetsToDelete.push(legacySheet);
+      }
+    }
+  }
 
   ss.getSheets().forEach(testSheet => {
     const name = testSheet.getName();
@@ -2514,7 +2565,10 @@ function getTestModeSenderSlugs(sheet) {
     if (!isActiveRow(sheet, row) || !isTestModeEnabled(sheet, row)) continue;
 
     const sender = String(sheet.getRange(row, COL.SENDER).getValue() || "").toLowerCase().trim();
-    if (sender) slugs.add(makeSenderSlug(sender));
+    if (!sender) continue;
+
+    slugs.add(makeSenderSlug(sender));
+    slugs.add(makeLegacySenderSlug(sender));
   }
 
   return slugs;
@@ -2533,13 +2587,11 @@ function syncInactiveTestCheckboxes(sheet) {
 }
 
 function isActiveRow(sheet, row) {
-  const value = sheet.getRange(row, COL.ACTIVE).getValue();
-  return value === true || String(value).toLowerCase() === "true";
+  return isCheckboxTrue(sheet.getRange(row, COL.ACTIVE).getValue());
 }
 
 function isTestModeEnabled(sheet, row) {
-  const value = sheet.getRange(row, COL.TEST).getValue();
-  return value === true || String(value).toLowerCase() === "true";
+  return isCheckboxTrue(sheet.getRange(row, COL.TEST).getValue());
 }
 
 function isTestSheetName(name) {
@@ -2559,11 +2611,35 @@ function senderSlugFromTestSheetName(name) {
   return null;
 }
 
-function makeSenderSlug(sender) {
-  return String(sender)
+function makeLegacySenderSlug(sender) {
+  return String(sender || "")
     .toLowerCase()
     .replace(/[^a-zA-Z0-9]/g, "_")
     .substring(0, 40);
+}
+
+function hashSenderHex(normalized, byteCount) {
+  const digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    String(normalized || ""),
+    Utilities.Charset.UTF_8
+  );
+
+  return digest
+    .slice(0, byteCount)
+    .map(byte => ((byte + 256) % 256).toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function makeSenderSlug(sender) {
+  const normalized = String(sender || "").toLowerCase().trim();
+  const readable = normalized
+    .replace(/[^a-z0-9]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "")
+    .substring(0, 30);
+  const hash = hashSenderHex(normalized, 6);
+  return `${readable}_${hash}`;
 }
 
 function makeTestSheetNameFromSlug(slug) {
@@ -2620,7 +2696,7 @@ function getActiveSenderSet(sheet) {
     const active = values[i][COL.ACTIVE - 1];
 
     if (!sender) continue;
-    if (active === false || String(active).toLowerCase() === "false") continue;
+    if (!isCheckboxTrue(active)) continue;
 
     activeSenders.add(sender);
   }
@@ -2719,9 +2795,74 @@ function openRegistryLink() {
 }
 
 function normalizeSender(from) {
-  const match = from.match(/<(.+?)>/);
+  const match = String(from || "").match(/<(.+?)>/);
 
-  return match ? match[1].toLowerCase().trim() : from.toLowerCase().trim();
+  return match ? match[1].toLowerCase().trim() : String(from || "").toLowerCase().trim();
+}
+
+function getNewestMessageSender(thread) {
+  const messages = thread.getMessages();
+  if (!messages || !messages.length) return "";
+
+  let newest = messages[0];
+  for (let i = 1; i < messages.length; i++) {
+    if (messages[i].getDate() > newest.getDate()) newest = messages[i];
+  }
+
+  return normalizeSender(newest.getFrom());
+}
+
+function getOwnEmailAddresses() {
+  const emails = new Set();
+
+  try {
+    const active = Session.getActiveUser().getEmail();
+    if (active) emails.add(String(active).toLowerCase().trim());
+  } catch (err) {
+    // Some contexts restrict Session.getActiveUser().
+  }
+
+  try {
+    const effective = Session.getEffectiveUser().getEmail();
+    if (effective) emails.add(String(effective).toLowerCase().trim());
+  } catch (err) {
+    // Ignore.
+  }
+
+  try {
+    (GmailApp.getAliases() || []).forEach(alias => {
+      if (alias) emails.add(String(alias).toLowerCase().trim());
+    });
+  } catch (err) {
+    // Ignore.
+  }
+
+  return emails;
+}
+
+/**
+ * Returns a KEEP-* reason when the message must not be trashed, else "".
+ */
+function classifyMessageProtection(message, threadHasKeepLabel, keepUnread) {
+  if (message.isStarred()) return "KEEP - STARRED";
+  if (threadHasKeepLabel) return "KEEP - AUTOCLEAN KEEP LABEL";
+  if (keepUnread && message.isUnread()) return "KEEP - UNREAD";
+  return "";
+}
+
+/**
+ * Trashes eligible items only when this run is live (not dry-run / Test).
+ * Returns how many messages were moved to trash.
+ */
+function trashEligibleItems(oldItems, ruleDryRun) {
+  if (ruleDryRun || !oldItems || !oldItems.length) return 0;
+
+  let trashed = 0;
+  oldItems.forEach(item => {
+    item.message.moveToTrash();
+    trashed++;
+  });
+  return trashed;
 }
 
 function formatDate(date) {

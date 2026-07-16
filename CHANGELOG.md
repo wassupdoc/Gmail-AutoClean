@@ -6,6 +6,26 @@ Versions match `SCRIPT_VERSION` in `AutoClean.gs` (format `YYYYMMDD-N`).
 
 ---
 
+## 20260716-4
+
+### Fixed
+
+- **Blank / corrupted Active cells** no longer count as live — only an explicit checked Active checkbox is processed (`getActiveRules`, `getActiveSenderSet`, `countActiveRules`)
+- **Sender slug collisions** — test-sheet names and identifiers now include a short SHA-256 digest; lifetime property keys use an independent full-sender hash (with one-time migration from legacy keys)
+- **Learn / Ignore** now use only the newest message’s sender in a labeled thread and skip the account’s own addresses / aliases
+
+### Added
+
+- Self-tests for Active/Test safety, sender-slug uniqueness, Learn newest-sender helper, message protection classification, and dry-run trash guards
+
+### Changed
+
+- Manual install / update docs require both `AutoClean.gs` and `AutoClean.tests.gs`
+- Keep protection wording: protected while AutoClean/Keep remains applied
+- Disclaimer lists unread protection when Keep Unread is enabled
+
+---
+
 ## 20260716-3
 
 ### Added

@@ -79,7 +79,10 @@ Extensions
 
 Paste:
 
-- AutoClean.gs
+- `AutoClean.gs`
+- `AutoClean.tests.gs` (required — the menu includes **Run Self Tests**)
+
+Create both files in the Apps Script project (File → New → Script file), then paste the matching contents from this repository.
 
 ---
 
@@ -117,14 +120,14 @@ If the AutoClean labels don't already exist, they will be created automatically 
 
 # Updating AutoClean
 
-Ther is **NO** auto updates with AppScripts.  
+There are **no automatic updates** for Apps Script projects.
 
 To update:
 
 1. Open your AutoClean spreadsheet on desktop.
 2. Go to `Extensions → Apps Script`.
-3. Open `AutoClean.gs`.
-4. Replace the existing code with the latest `AutoClean.gs` from this repository.
+3. Replace the contents of `AutoClean.gs` with the latest from this repository.
+4. Replace (or add) `AutoClean.tests.gs` with the latest from this repository.
 5. Save the project.
 6. Return to the spreadsheet and reload the page.
 7. Run `AutoClean → View Settings`.
@@ -162,7 +165,7 @@ Costco Newsletter
 
 Run AutoClean.
 
-The sender is automatically added to the registry.
+AutoClean learns **only the sender of the newest message** in that labeled thread (not every participant in the conversation). Your own address and Gmail aliases are skipped.
 
 The Learn label is automatically removed because it is only used to teach AutoClean about a new sender once.
 
@@ -181,7 +184,7 @@ Nothing is deleted until you've reviewed the results.
 
 Apply this label to **any email or thread**.
 
-Those emails are permanently protected.
+Those emails are protected for as long as the **AutoClean/Keep** label remains applied.
 
 Examples:
 
@@ -601,10 +604,15 @@ Use **AutoClean → Run Self Tests** to run the built-in safety checks in `AutoC
 
 The test runner validates high-risk contracts such as:
 
+- Active/Test fail-closed safety (blank Active is never live)
+- sender-slug / lifetime-key collision resistance
+- Learn newest-message sender selection
+- message protection classification (starred / Keep / unread)
+- dry-run vs live trash guards (`moveToTrash` never called in dry run)
 - stat/date normalization and lifetime reads
 - date/text heal behavior
 - registry range math
-- dry-run vs live write behavior for `updateRuleStats`
+- `updateRuleStats` dry-run vs live lifetime write behavior
 - `syncLifetimeTotalsWithSheet` max-invariant (never decrease totals)
 - `reconcileRegistrySheet` full-mode orchestration/reporting
 
@@ -714,6 +722,7 @@ The following emails are never deleted:
 
 - ⭐ Starred emails
 - 🏷 Emails or threads labeled AutoClean/Keep
+- 📬 Unread messages when Keep Unread is enabled
 - 🚫 Senders marked inactive
 - 🚫 Senders learned through AutoClean/Ignore
 - 🗑 Emails already in Trash

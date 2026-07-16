@@ -15,7 +15,19 @@ function runSelfTests() {
     test_updateRuleStats_dryRun_doesNotIncrementLifetimeTotal,
     test_updateRuleStats_liveRun_incrementsLifetimeTotal,
     test_syncLifetimeTotalsWithSheet_usesMaxNeverDecreases,
-    test_reconcileRegistrySheet_reportsRepairNotesAndFullActions
+    test_reconcileRegistrySheet_reportsRepairNotesAndFullActions,
+    test_getActiveRules_blankActive_isSkipped,
+    test_getActiveRules_falseActive_isSkipped,
+    test_getActiveRules_trueActive_blankTest_isLive,
+    test_getActiveRules_trueActive_trueTest_isPreview,
+    test_getActiveRules_corruptedActiveDate_isSkipped,
+    test_makeSenderSlug_similarAddresses_doNotCollide,
+    test_lifetimePropertyKeys_doNotCollide_forSimilarSenders,
+    test_getNewestMessageSender_usesNewestOnly,
+    test_normalizeSender_displayNameAngleBrackets,
+    test_classifyMessageProtection_guards,
+    test_trashEligibleItems_dryRun_neverCallsMoveToTrash,
+    test_trashEligibleItems_live_callsMoveToTrash
   ];
 
   const failures = [];
@@ -266,6 +278,132 @@ function makeFakeRange() {
     setFontWeight: function() { return range; }
   };
   return range;
+}
+
+function test_getActiveRules_blankActive_isSkipped() {
+  const sheet = makeRulesSheet([["news@example.com", "count", 1, "", false, true]]);
+  const rules = getActiveRules(sheet);
+  assertEq(rules.length, 0, "Blank Active must be skipped");
+}
+
+function test_getActiveRules_falseActive_isSkipped() {
+  const sheet = makeRulesSheet([["news@example.com", "count", 1, false, false, true]]);
+  const rules = getActiveRules(sheet);
+  assertEq(rules.length, 0, "FALSE Active must be skipped");
+}
+
+function test_getActiveRules_trueActive_blankTest_isLive() {
+  const sheet = makeRulesSheet([["news@example.com", "count", 1, true, "", true]]);
+  const rules = getActiveRules(sheet);
+  assertEq(rules.length, 1, "TRUE Active should produce a rule");
+  assertEq(rules[0].test, false, "Blank Test should mean live (not preview)");
+}
+
+function test_getActiveRules_trueActive_trueTest_isPreview() {
+  const sheet = makeRulesSheet([["news@example.com", "count", 1, true, true, true]]);
+  const rules = getActiveRules(sheet);
+  assertEq(rules.length, 1, "TRUE Active + TRUE Test should produce a rule");
+  assertEq(rules[0].test, true, "TRUE Test should mean preview");
+}
+
+function test_getActiveRules_corruptedActiveDate_isSkipped() {
+  const sheet = makeRulesSheet([["news@example.com", "count", 1, new Date(1899, 11, 30), false, true]]);
+  const rules = getActiveRules(sheet);
+  assertEq(rules.length, 0, "Corrupted Active date must be skipped");
+}
+
+function test_makeSenderSlug_similarAddresses_doNotCollide() {
+  const a = makeSenderSlug("news-alert@example.com");
+  const b = makeSenderSlug("news.alert@example.com");
+  assertTrue(a !== b, "Similar senders must not share the same slug");
+  assertTrue(/_[0-9a-f]{12}$/.test(a), "Slug should end with 12-char hex digest");
+}
+
+function test_lifetimePropertyKeys_doNotCollide_forSimilarSenders() {
+  const a = lifetimeTotalPropertyKey("news-alert@example.com");
+  const b = lifetimeTotalPropertyKey("news.alert@example.com");
+  assertTrue(a !== b, "Lifetime property keys must not collide for similar senders");
+  assertTrue(a.indexOf("H_") > -1, "Lifetime key should use independent hash prefix");
+}
+
+function test_getNewestMessageSender_usesNewestOnly() {
+  const thread = {
+    getMessages: () => [
+      {
+        getFrom: () => "old@example.com",
+        getDate: () => new Date("2026-01-01")
+      },
+      {
+        getFrom: () => "Display Name <newest@example.com>",
+        getDate: () => new Date("2026-07-01")
+      },
+      {
+        getFrom: () => "middle@example.com",
+        getDate: () => new Date("2026-03-01")
+      }
+    ]
+  };
+
+  assertEq(getNewestMessageSender(thread), "newest@example.com", "Must learn newest message sender only");
+}
+
+function test_normalizeSender_displayNameAngleBrackets() {
+  assertEq(
+    normalizeSender("Display Name <EMAIL@Example.com>"),
+    "email@example.com",
+    "Angle-bracket From headers should normalize to lowercase email"
+  );
+}
+
+function test_classifyMessageProtection_guards() {
+  const starred = { isStarred: () => true, isUnread: () => false };
+  const keepThread = { isStarred: () => false, isUnread: () => false };
+  const unread = { isStarred: () => false, isUnread: () => true };
+  const plain = { isStarred: () => false, isUnread: () => false };
+
+  assertEq(classifyMessageProtection(starred, false, true), "KEEP - STARRED", "Starred must be protected");
+  assertEq(classifyMessageProtection(keepThread, true, true), "KEEP - AUTOCLEAN KEEP LABEL", "Keep label must protect");
+  assertEq(classifyMessageProtection(unread, false, true), "KEEP - UNREAD", "Unread + Keep Unread must protect");
+  assertEq(classifyMessageProtection(unread, false, false), "", "Unread with Keep Unread off is eligible");
+  assertEq(classifyMessageProtection(plain, false, true), "", "Plain message is eligible");
+}
+
+function test_trashEligibleItems_dryRun_neverCallsMoveToTrash() {
+  let calls = 0;
+  const items = [{ message: { moveToTrash: () => { calls++; } } }];
+  const trashed = trashEligibleItems(items, true);
+  assertEq(trashed, 0, "Dry run must trash 0");
+  assertEq(calls, 0, "Dry run must never call moveToTrash");
+}
+
+function test_trashEligibleItems_live_callsMoveToTrash() {
+  let calls = 0;
+  const items = [
+    { message: { moveToTrash: () => { calls++; } } },
+    { message: { moveToTrash: () => { calls++; } } }
+  ];
+  const trashed = trashEligibleItems(items, false);
+  assertEq(trashed, 2, "Live run should trash all items");
+  assertEq(calls, 2, "Live run should call moveToTrash once per item");
+}
+
+function makeRulesSheet(rows) {
+  const header = ["Sender", "Mode", "Value", "Active", "Test", "Keep Unread", "Last Checked", "Last Removed", "Total Removed", "Would Delete", "Protected Kept", "Test Sheet", "Notes", "Added", "Enabled Since", "Last Email Seen", "Last Batch", "Gmail Search"];
+  const values = [header];
+
+  rows.forEach(row => {
+    const full = new Array(18).fill("");
+    for (let i = 0; i < row.length; i++) full[i] = row[i];
+    values.push(full);
+  });
+
+  const fake = makeFakeSheet();
+  fake.getDataRange = () => ({
+    getValues: () => values
+  });
+
+  // getActiveRules may write Enabled Since via getRange(row, COL.ENABLED_SINCE).setValue(...)
+  return fake;
 }
 
 function makeFakeSheet() {
