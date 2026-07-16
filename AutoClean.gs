@@ -20,7 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  ***************/
 
-const SCRIPT_VERSION = "20260716-2";
+const SCRIPT_VERSION = "20260716-3";
 const SCRIPT_REPOSITORY_URL = "https://github.com/wassupdoc/Gmail-AutoClean";
 
 const GLOBAL_DRY_RUN = false; // Developer-only safety switch; not shown in the UI (use Menu Dry Run)
@@ -113,6 +113,7 @@ function buildAutoCleanMenu() {
     .addItem("Show Registry", "showRegistry")
     .addItem("View Settings", "viewSettings")
     .addItem("Verify/Fix Registry", "verifyFixRegistryFromMenu")
+    .addItem("Run Self Tests", "runSelfTests")
     .addSeparator()
     .addItem("Help", "showHelp")
     .addToUi();

@@ -6,6 +6,20 @@ Versions match `SCRIPT_VERSION` in `AutoClean.gs` (format `YYYYMMDD-N`).
 
 ---
 
+## 20260716-3
+
+### Added
+
+- New menu item: **Run Self Tests**
+- Separate Apps Script test harness file: `AutoClean.tests.gs`
+- Initial self-tests for high-risk corruption/total-write contracts:
+  - stat/date normalization and lifetime count reads
+  - datetime/text heal rules
+  - registry column range math
+  - `updateRuleStats` dry-run vs live lifetime write behavior
+
+---
+
 ## 20260716-2
 
 ### Fixed
