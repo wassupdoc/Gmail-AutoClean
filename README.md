@@ -6,6 +6,8 @@ Instead of manually deleting hundreds (or thousands) of old emails, AutoClean le
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/S0P222IKZ9)
 
+For developers extending AutoClean, see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** (registry/Gmail lifecycles, write paths, invariants, and test philosophy).
+
 ---
 
 # Features

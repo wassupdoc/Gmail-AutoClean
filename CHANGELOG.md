@@ -17,6 +17,7 @@ Versions match `SCRIPT_VERSION` in `AutoClean.gs` (format `YYYYMMDD-N`).
 ### Added
 
 - Direct self-test for `isCheckboxTrue` fail-closed contract
+- **`docs/ARCHITECTURE.md`** — registry/Gmail lifecycles, reconciliation philosophy, write paths, schema/lifetime invariants, and test philosophy
 
 ### Notes
 
