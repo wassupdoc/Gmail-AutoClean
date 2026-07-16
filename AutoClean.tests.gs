@@ -27,7 +27,8 @@ function runSelfTests() {
     test_normalizeSender_displayNameAngleBrackets,
     test_classifyMessageProtection_guards,
     test_trashEligibleItems_dryRun_neverCallsMoveToTrash,
-    test_trashEligibleItems_live_callsMoveToTrash
+    test_trashEligibleItems_live_callsMoveToTrash,
+    test_isCheckboxTrue_acceptsOnlyBooleanTrue
   ];
 
   const failures = [];
@@ -385,6 +386,18 @@ function test_trashEligibleItems_live_callsMoveToTrash() {
   const trashed = trashEligibleItems(items, false);
   assertEq(trashed, 2, "Live run should trash all items");
   assertEq(calls, 2, "Live run should call moveToTrash once per item");
+}
+
+function test_isCheckboxTrue_acceptsOnlyBooleanTrue() {
+  assertEq(isCheckboxTrue(true), true, "Boolean true should be checked");
+  assertEq(isCheckboxTrue(false), false, "Boolean false should not be checked");
+  assertEq(isCheckboxTrue("TRUE"), false, "Text TRUE must fail closed");
+  assertEq(isCheckboxTrue("true"), false, "Text true must fail closed");
+  assertEq(isCheckboxTrue(1), false, "Numeric 1 must fail closed");
+  assertEq(isCheckboxTrue(new Date()), false, "Date must fail closed");
+  assertEq(isCheckboxTrue(null), false, "Null must fail closed");
+  assertEq(isCheckboxTrue(""), false, "Blank must fail closed");
+  assertEq(isCheckboxTrue(new Date(1899, 11, 30)), false, "Epoch date must fail closed");
 }
 
 function makeRulesSheet(rows) {

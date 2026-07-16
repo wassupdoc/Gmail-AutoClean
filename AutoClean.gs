@@ -20,7 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  ***************/
 
-const SCRIPT_VERSION = "20260716-4";
+const SCRIPT_VERSION = "20260716-5";
 const SCRIPT_REPOSITORY_URL = "https://github.com/wassupdoc/Gmail-AutoClean";
 
 const GLOBAL_DRY_RUN = false; // Developer-only safety switch; not shown in the UI (use Menu Dry Run)
@@ -193,8 +193,10 @@ function getCheckboxEditValue(e) {
 }
 
 function isCheckboxTrue(value) {
+  // Fail closed: only an explicit boolean true counts as checked.
+  // Strings, numbers, dates, and null/blank are treated as unchecked.
   if (isSheetsEpochDate(value)) return false;
-  return value === true || String(value).toLowerCase() === "true";
+  return value === true;
 }
 
 function setCheckboxValue(cell, checked) {

@@ -196,7 +196,7 @@ Examples:
 
 Protected emails are excluded before retention rules are calculated.
 
-**AutoClean/Keep** stays on protected mail permanently — AutoClean never removes it.
+**AutoClean never removes the AutoClean/Keep label automatically.** You can remove it yourself when protection is no longer needed.
 
 ---
 
@@ -459,8 +459,10 @@ Each sender gets its own review worksheet, making it easy to approve one sender 
 Running AutoClean creates a worksheet such as
 
 ```
-TEST_sales_e_costco_com
+TEST_sales_e_costco_com_a1b2c3d4e5f6
 ```
+
+(Names use a short readable prefix plus a hash suffix so similar addresses cannot collide.)
 
 The **Test Sheet** column in the registry links directly to that worksheet tab.
 

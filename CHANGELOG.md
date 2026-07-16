@@ -6,6 +6,24 @@ Versions match `SCRIPT_VERSION` in `AutoClean.gs` (format `YYYYMMDD-N`).
 
 ---
 
+## 20260716-5
+
+### Fixed
+
+- `isCheckboxTrue` now accepts **only** boolean `true` (string `"TRUE"`, `1`, dates, null all fail closed)
+- README test-sheet example updated to hashed name form (`TEST_…_<12-hex>`)
+- Keep-label docs: clarify AutoClean never removes the label automatically (user may still remove it)
+
+### Added
+
+- Direct self-test for `isCheckboxTrue` fail-closed contract
+
+### Notes
+
+- Legacy lifetime totals still migrate automatically to hashed keys. Previously collided legacy keys cannot be separated retrospectively — whichever sender migrates first inherits the shared total.
+
+---
+
 ## 20260716-4
 
 ### Fixed
@@ -23,6 +41,10 @@ Versions match `SCRIPT_VERSION` in `AutoClean.gs` (format `YYYYMMDD-N`).
 - Manual install / update docs require both `AutoClean.gs` and `AutoClean.tests.gs`
 - Keep protection wording: protected while AutoClean/Keep remains applied
 - Disclaimer lists unread protection when Keep Unread is enabled
+
+### Notes
+
+- Legacy lifetime totals migrate automatically. Previously collided legacy keys cannot be separated retrospectively.
 
 ---
 
