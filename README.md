@@ -588,10 +588,30 @@ View Settings
 
 Verify/Fix Registry
 
+Run Self Tests
+
 Help
 ```
 
 `purgeEmptyTestSheets()` (deletes only empty `TEST_*` sheets) exists in the script but is not in the menu — it was removed and may be added back later. Use **Purge All Test Sheets** to remove all test sheets, or run `purgeEmptyTestSheets()` from the Apps Script editor if you only want to clear empty ones.
+
+## Self Tests
+
+Use **AutoClean → Run Self Tests** to run the built-in safety checks in `AutoClean.tests.gs`.
+
+The test runner validates high-risk contracts such as:
+
+- stat/date normalization and lifetime reads
+- date/text heal behavior
+- registry range math
+- dry-run vs live write behavior for `updateRuleStats`
+- `syncLifetimeTotalsWithSheet` max-invariant (never decrease totals)
+- `reconcileRegistrySheet` full-mode orchestration/reporting
+
+Results are shown in a summary alert:
+
+- `Passed: X/Y`
+- `Failed: N`
 
 Most users never need to open Apps Script after installation.
 

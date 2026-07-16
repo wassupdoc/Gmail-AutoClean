@@ -12,11 +12,17 @@ Versions match `SCRIPT_VERSION` in `AutoClean.gs` (format `YYYYMMDD-N`).
 
 - New menu item: **Run Self Tests**
 - Separate Apps Script test harness file: `AutoClean.tests.gs`
-- Initial self-tests for high-risk corruption/total-write contracts:
+- Self-tests for high-risk corruption/total-write contracts:
   - stat/date normalization and lifetime count reads
   - datetime/text heal rules
   - registry column range math
   - `updateRuleStats` dry-run vs live lifetime write behavior
+  - `syncLifetimeTotalsWithSheet` max-invariant (`max(sheet, props)`)
+  - `reconcileRegistrySheet` full-mode orchestration/report notes
+
+### Fixed
+
+- Self-test harness fake `sheet` for reconcile tests now includes methods used by `updateRegistryDryRunIndicator` (`getLastColumn`, `getRange`)
 
 ---
 
