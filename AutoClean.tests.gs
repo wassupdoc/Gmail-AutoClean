@@ -187,7 +187,10 @@ function test_syncLifetimeTotalsWithSheet_usesMaxNeverDecreases() {
 }
 
 function test_reconcileRegistrySheet_reportsRepairNotesAndFullActions() {
-  const sheet = {};
+  const sheet = {
+    getLastColumn: () => 18,
+    getRange: () => makeFakeRange()
+  };
   const calls = [];
 
   const originals = {
@@ -252,6 +255,17 @@ function test_reconcileRegistrySheet_reportsRepairNotesAndFullActions() {
     trimRegistryTrailingRows = originals.trimRegistryTrailingRows;
     applyRegistrySchemaWidths = originals.applyRegistrySchemaWidths;
   }
+}
+
+function makeFakeRange() {
+  const range = {
+    breakApart: function() { return range; },
+    clearContent: function() { return range; },
+    setBackground: function() { return range; },
+    setFontColor: function() { return range; },
+    setFontWeight: function() { return range; }
+  };
+  return range;
 }
 
 function makeFakeSheet() {
