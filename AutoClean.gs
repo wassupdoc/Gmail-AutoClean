@@ -20,7 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  ***************/
 
-const SCRIPT_VERSION = "20260715-3";
+const SCRIPT_VERSION = "20260716-2";
 const SCRIPT_REPOSITORY_URL = "https://github.com/wassupdoc/Gmail-AutoClean";
 
 const GLOBAL_DRY_RUN = false; // Developer-only safety switch; not shown in the UI (use Menu Dry Run)
@@ -775,7 +775,7 @@ function reconcileRegistrySheet(sheet, options) {
     migrated: false,
     healedKeepUnread: 0,
     healedCheckboxColumns: 0,
-    healedStatColumns: 0,
+    healedMisplaced: { datetime: 0, text: 0, stats: 0, testRows: 0 },
     healedNumericStats: 0,
     syncedLifetimeTotals: 0,
     formatsFixed: 0,
@@ -798,9 +798,18 @@ function reconcileRegistrySheet(sheet, options) {
     report.notes.push("Added Keep Unread column with default ON.");
   }
 
-  report.healedStatColumns = healCheckboxCorruptionOnStatColumns(sheet);
-  if (report.healedStatColumns) {
-    report.notes.push("Cleared checkbox corruption from numeric/date columns.");
+  report.healedMisplaced = healMisplacedRegistryValues(sheet);
+  if (report.healedMisplaced.datetime) {
+    report.notes.push(`Cleared ${report.healedMisplaced.datetime} misplaced value(s) from date/time columns.`);
+  }
+  if (report.healedMisplaced.text) {
+    report.notes.push(`Cleared ${report.healedMisplaced.text} date(s) from text columns (Notes/Test Sheet).`);
+  }
+  if (report.healedMisplaced.stats) {
+    report.notes.push(`Repaired ${report.healedMisplaced.stats} corrupted stat cell(s).`);
+  }
+  if (report.healedMisplaced.testRows) {
+    report.notes.push(`Moved ${report.healedMisplaced.testRows} test-row preview count(s) to Would Delete.`);
   }
 
   report.healedKeepUnread = healKeepUnreadMisplacedDates(sheet);
@@ -823,7 +832,7 @@ function reconcileRegistrySheet(sheet, options) {
 
   report.healedNumericStats = healNumericStatColumns(sheet);
   if (report.healedNumericStats) {
-    report.notes.push("Repaired numeric stat columns (date/checkbox corruption).");
+    report.notes.push("Enforced number format on stat columns.");
   }
 
   report.syncedLifetimeTotals = syncLifetimeTotalsWithSheet(sheet);
@@ -888,9 +897,9 @@ function migrateAddKeepUnreadColumn(sheet) {
   return true;
 }
 
-function getRegistryColumnRange(sheet, column, lastRow) {
-  const endRow = lastRow || sheet.getLastRow();
-  const numRows = Math.max(endRow - 1, 1);
+function getRegistryColumnRange(sheet, column, lastDataRow) {
+  const endRow = lastDataRow || getRegistryLastDataRow(sheet);
+  const numRows = Math.max(endRow - 2 + 1, 1);
   return sheet.getRange(2, column, numRows, 1);
 }
 
@@ -910,6 +919,54 @@ function isSheetsEpochDate(value) {
   return value.getFullYear() === 1899 && value.getMonth() === 11 && value.getDate() === 30;
 }
 
+// Stat integers stored in a datetime column display as 1/9/1900, 4/13/1900, etc.
+function isMisplacedStatAsDate(value) {
+  if (!(value instanceof Date) || isNaN(value.getTime())) return false;
+  if (isSheetsEpochDate(value)) return true;
+  return value.getFullYear() < 1910;
+}
+
+function isRealRegistryDate(value) {
+  if (!(value instanceof Date) || isNaN(value.getTime())) return false;
+  if (isSheetsEpochDate(value)) return false;
+  return value.getFullYear() >= 1990;
+}
+
+function looksLikeMisplacedDateText(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  return /^\d{1,2}\/\d{1,2}\/\d{4}/.test(text);
+}
+
+function looksLikeBatchLabelText(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  return /^Rows \d+/i.test(text);
+}
+
+function healDatetimeRegistryValue(value) {
+  if (value === true || value === false) return "";
+  if (typeof value === "number" && isFinite(value)) return "";
+  if (isMisplacedStatAsDate(value)) return "";
+  if (isRealRegistryDate(value)) return value;
+  if (value instanceof Date) return "";
+
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (looksLikeBatchLabelText(text)) return "";
+
+  const parsed = new Date(text);
+  if (!isNaN(parsed.getTime()) && parsed.getFullYear() >= 1990) return parsed;
+
+  return "";
+}
+
+function healTextRegistryValue(value) {
+  if (isDateValue(value)) return "";
+  if (looksLikeMisplacedDateText(value)) return "";
+  return value === null || value === undefined ? "" : value;
+}
+
 function isDateLikeNumberFormat(format) {
   const actual = String(format || "").trim().toLowerCase();
   if (!actual || actual === "general" || actual === "@" || actual === "0") return false;
@@ -923,38 +980,73 @@ function applyCheckboxCell(cell, checked) {
   cell.setValue(!!checked);
 }
 
-function healCheckboxCorruptionOnStatColumns(sheet) {
-  if (!columnHasCheckboxValidation(sheet, 2, COL.LAST_CHECKED)) return 0;
+function healMisplacedRegistryValues(sheet) {
+  const lastDataRow = getRegistryLastDataRow(sheet);
+  const report = { datetime: 0, text: 0, stats: 0, testRows: 0 };
+  if (lastDataRow < 2) return report;
 
-  const lastDataRow = Math.max(getRegistryLastDataRow(sheet), 2);
-  const statColumns = getRegistrySchema()
-    .filter(column => column.type === "number" || column.type === "datetime" || column.type === "date")
-    .map(column => column.col);
+  const datetimeCols = [COL.LAST_CHECKED, COL.ADDED, COL.ENABLED_SINCE, COL.LAST_EMAIL_SEEN];
+  const textCols = [COL.NOTES, COL.TEST_SHEET];
 
-  statColumns.forEach(column => {
-    const range = getRegistryColumnRange(sheet, column, lastDataRow);
-    const values = range.getValues();
+  for (let row = 2; row <= lastDataRow; row++) {
+    const sender = String(sheet.getRange(row, COL.SENDER).getValue() || "").trim();
+    if (!sender) continue;
 
-    const repairedValues = values.map(row => {
-      const value = row[0];
-
-      if (value === true || value === false) {
-        if (column === COL.LAST_CHECKED || column === COL.ADDED || column === COL.ENABLED_SINCE || column === COL.LAST_EMAIL_SEEN) {
-          return [""];
-        }
-        return [0];
+    datetimeCols.forEach(col => {
+      const cell = sheet.getRange(row, col);
+      const value = cell.getValue();
+      const healed = healDatetimeRegistryValue(value);
+      const changed = healed !== value &&
+        !(healed instanceof Date && value instanceof Date && healed.getTime() === value.getTime());
+      if (changed) {
+        cell.setValue(healed === "" ? "" : healed);
+        report.datetime++;
       }
-
-      return row;
     });
 
-    range.clearDataValidations();
-    range.setValues(repairedValues);
-  });
+    textCols.forEach(col => {
+      const cell = sheet.getRange(row, col);
+      const value = cell.getValue();
+      const healed = healTextRegistryValue(value);
+      if (healed !== value) {
+        cell.setValue(healed);
+        report.text++;
+      }
+    });
 
-  applyRegistrySchemaFormats(sheet);
-  Logger.log("Healed checkbox corruption on stat/date columns.");
-  return statColumns.length;
+    statNumberColumns().forEach(col => {
+      const cell = sheet.getRange(row, col);
+      const value = cell.getValue();
+      if (value === true || value === false || value instanceof Date) {
+        cell.clearDataValidations();
+        cell.setNumberFormat("0");
+        cell.setValue(normalizeStatNumberValue(value));
+        report.stats++;
+      }
+    });
+
+    if (sheet.getRange(row, COL.TEST).getValue() === true) {
+      const lrCell = sheet.getRange(row, COL.LAST_REMOVED);
+      const wdCell = sheet.getRange(row, COL.WOULD_DELETE);
+      const lr = normalizeStatNumberValue(lrCell.getValue());
+      const wd = normalizeStatNumberValue(wdCell.getValue());
+      if (lr > 0 && wd === 0) {
+        wdCell.setNumberFormat("0");
+        wdCell.setValue(lr);
+        lrCell.setNumberFormat("0");
+        lrCell.setValue(0);
+        report.testRows++;
+      }
+    }
+  }
+
+  if (report.datetime || report.text || report.stats || report.testRows) {
+    Logger.log(
+      `Healed misplaced registry values: datetime=${report.datetime}, text=${report.text}, stats=${report.stats}, testRows=${report.testRows}`
+    );
+  }
+
+  return report;
 }
 
 function healKeepUnreadMisplacedDates(sheet) {
@@ -1633,8 +1725,10 @@ function normalizeStatNumberValue(value) {
   if (value === true || value === false) return 0;
 
   if (value instanceof Date && !isNaN(value.getTime())) {
+    // Real calendar dates do not belong in stat columns — do not convert to serial.
+    if (isRealRegistryDate(value)) return 0;
     const serial = sheetsDateTimeToSerial(value);
-    if (serial >= 0 && serial <= 10000000) return Math.floor(serial);
+    if (serial >= 0 && serial < 50000) return Math.floor(serial);
     return 0;
   }
 
@@ -1647,10 +1741,22 @@ function normalizeStatNumberValue(value) {
 }
 
 function readLifetimeCountFromCell(cell) {
-  const normalized = normalizeStatNumberValue(cell.getValue());
-  if (normalized > 0) return normalized;
-
   const display = String(cell.getDisplayValue() || "").replace(/,/g, "").trim();
+  if (display !== "" && /^\d+$/.test(display)) {
+    return Math.floor(Number(display));
+  }
+
+  const value = cell.getValue();
+  if (typeof value === "number" && isFinite(value) && value >= 0) {
+    return Math.floor(value);
+  }
+
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    if (isRealRegistryDate(value)) return 0;
+    const serial = sheetsDateTimeToSerial(value);
+    if (serial >= 0 && serial < 50000) return Math.floor(serial);
+  }
+
   if (display !== "") {
     const parsed = Number(display);
     if (isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
@@ -1689,31 +1795,12 @@ function healNumericStatColumns(sheet) {
 
   statNumberColumns().forEach(column => {
     const range = getRegistryColumnRange(sheet, column, lastDataRow);
-    const values = range.getValues();
-    let changed = false;
-
-    const repairedValues = values.map(row => {
-      const value = row[0];
-      const normalized = normalizeStatNumberValue(value);
-
-      if (value instanceof Date || value === true || value === false) {
-        changed = true;
-      } else if (typeof value === "number" && normalized !== value) {
-        changed = true;
-      } else if (value !== "" && value !== null && normalized !== value) {
-        changed = true;
-      }
-
-      return [normalized];
-    });
-
     const sampleFormat = sheet.getRange(2, column).getNumberFormat();
     const needsFormat = !registryFormatMatches("number", sampleFormat);
 
-    if (changed || needsFormat) {
+    if (needsFormat) {
       range.clearDataValidations();
       range.setNumberFormat("0");
-      if (changed) range.setValues(repairedValues);
       repairedColumns++;
     }
   });
