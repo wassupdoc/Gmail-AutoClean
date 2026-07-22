@@ -28,7 +28,22 @@ function runSelfTests() {
     test_classifyMessageProtection_guards,
     test_trashEligibleItems_dryRun_neverCallsMoveToTrash,
     test_trashEligibleItems_live_callsMoveToTrash,
-    test_isCheckboxTrue_acceptsOnlyBooleanTrue
+    test_isCheckboxTrue_acceptsOnlyBooleanTrue,
+    test_isCheckboxTrue_rejectsAllNonBooleanTruthyShapes,
+    test_coerceCheckboxValue_preservesStringTrue,
+    test_coerceCheckboxValue_edgeCases_matrix,
+    test_coerceCheckboxValue_activeDefault_neverTurnsJunkOn,
+    test_coerceCheckboxValue_keepUnreadDefault_blankBecomesOn,
+    test_getCheckboxEditValue_readsEditEventStrings,
+    test_getActiveRules_stringTrueActive_isSkipped,
+    test_getActiveRules_stringFalseActive_isSkipped,
+    test_getActiveRules_numericActive_isSkipped,
+    test_getActiveRules_stringKeepUnread_isOff,
+    test_getActiveRules_stringTest_isNotPreview,
+    test_countActiveRules_matchesBooleanActiveOnly,
+    test_getActiveSenderSet_ignoresStringTrue,
+    test_checkboxFormats_rejectPlainTextAndDates,
+    test_registryFormatPattern_checkboxUsesGeneral
   ];
 
   const failures = [];
@@ -313,6 +328,12 @@ function test_getActiveRules_corruptedActiveDate_isSkipped() {
   assertEq(rules.length, 0, "Corrupted Active date must be skipped");
 }
 
+function test_getActiveRules_stringTrueActive_isSkipped() {
+  const sheet = makeRulesSheet([["news@example.com", "count", 1, "TRUE", false, true]]);
+  const rules = getActiveRules(sheet);
+  assertEq(rules.length, 0, "String TRUE Active must fail closed until coerced to boolean");
+}
+
 function test_makeSenderSlug_similarAddresses_doNotCollide() {
   const a = makeSenderSlug("news-alert@example.com");
   const b = makeSenderSlug("news.alert@example.com");
@@ -398,6 +419,186 @@ function test_isCheckboxTrue_acceptsOnlyBooleanTrue() {
   assertEq(isCheckboxTrue(null), false, "Null must fail closed");
   assertEq(isCheckboxTrue(""), false, "Blank must fail closed");
   assertEq(isCheckboxTrue(new Date(1899, 11, 30)), false, "Epoch date must fail closed");
+}
+
+function test_isCheckboxTrue_rejectsAllNonBooleanTruthyShapes() {
+  const rejected = [
+    ["false", "lowercase false string"],
+    ["FALSE", "uppercase FALSE string"],
+    [" True ", "padded True string"],
+    ["yes", "yes string"],
+    ["1", "string 1"],
+    [0, "numeric 0"],
+    [1, "numeric 1"],
+    [-1, "numeric -1"],
+    [undefined, "undefined"],
+    ["   ", "whitespace"],
+    [new Date(1900, 0, 9), "misplaced 1900 date"],
+    [new Date(NaN), "invalid date"],
+    [{}, "object"],
+    [[], "array"]
+  ];
+
+  rejected.forEach(entry => {
+    assertEq(isCheckboxTrue(entry[0]), false, entry[1] + " must fail closed");
+  });
+}
+
+function test_coerceCheckboxValue_preservesStringTrue() {
+  assertEq(coerceCheckboxValue(true, false), true, "Boolean true preserved");
+  assertEq(coerceCheckboxValue(false, true), false, "Boolean false preserved");
+  assertEq(coerceCheckboxValue("TRUE", false), true, "String TRUE coerces to true");
+  assertEq(coerceCheckboxValue("true", false), true, "String true coerces to true");
+  assertEq(coerceCheckboxValue("FALSE", true), false, "String FALSE coerces to false");
+  assertEq(coerceCheckboxValue("", true), true, "Blank uses defaultChecked true");
+  assertEq(coerceCheckboxValue(null, false), false, "Null uses defaultChecked false");
+  assertEq(coerceCheckboxValue(new Date(1899, 11, 30), true), false, "Epoch becomes false");
+  assertEq(coerceCheckboxValue("maybe", true), false, "Junk becomes false");
+}
+
+function test_coerceCheckboxValue_edgeCases_matrix() {
+  // Checked-intent strings (heal must preserve as boolean true)
+  assertEq(coerceCheckboxValue("TRUE", false), true, "TRUE");
+  assertEq(coerceCheckboxValue("True", false), true, "True");
+  assertEq(coerceCheckboxValue(" true ", false), true, "padded true");
+  assertEq(coerceCheckboxValue("false", true), false, "false string wins over default");
+  assertEq(coerceCheckboxValue(" False ", true), false, "padded False");
+
+  // Blank-like → column default
+  assertEq(coerceCheckboxValue("", false), false, "empty + default false");
+  assertEq(coerceCheckboxValue("", true), true, "empty + default true");
+  assertEq(coerceCheckboxValue(null, true), true, "null + default true");
+  assertEq(coerceCheckboxValue(undefined, false), false, "undefined + default false");
+  assertEq(coerceCheckboxValue(undefined, true), true, "undefined + default true");
+  assertEq(coerceCheckboxValue("   ", false), false, "whitespace + default false");
+  assertEq(coerceCheckboxValue("   ", true), true, "whitespace + default true");
+
+  // Epoch / FALSE-as-date always unchecked
+  assertEq(coerceCheckboxValue(new Date(1899, 11, 30), true), false, "epoch ignores default true");
+  assertEq(coerceCheckboxValue(new Date(1899, 11, 30), false), false, "epoch with default false");
+
+  // Other dates use column default (misplaced calendar value in checkbox col)
+  assertEq(coerceCheckboxValue(new Date(2024, 5, 1), true), true, "real date + default true");
+  assertEq(coerceCheckboxValue(new Date(2024, 5, 1), false), false, "real date + default false");
+  assertEq(coerceCheckboxValue(new Date(1900, 0, 9), false), false, "1900 serial-ish date + default false");
+  assertEq(coerceCheckboxValue(new Date(1900, 0, 9), true), true, "1900 serial-ish date + default true");
+
+  // Junk / numeric corruption never becomes checked via coerce
+  assertEq(coerceCheckboxValue(1, false), false, "numeric 1");
+  assertEq(coerceCheckboxValue(1, true), false, "numeric 1 ignores default");
+  assertEq(coerceCheckboxValue(0, true), false, "numeric 0");
+  assertEq(coerceCheckboxValue("1", true), false, "string 1");
+  assertEq(coerceCheckboxValue("yes", true), false, "yes");
+  assertEq(coerceCheckboxValue("on", false), false, "on");
+  assertEq(coerceCheckboxValue("checked", true), false, "checked");
+  assertEq(coerceCheckboxValue(new Date(NaN), true), false, "invalid date");
+}
+
+function test_coerceCheckboxValue_activeDefault_neverTurnsJunkOn() {
+  // Active has no checkboxDefault → heal uses defaultChecked false
+  const junk = ["maybe", 1, 0, "yes", "TRUEISH", new Date(NaN)];
+  junk.forEach(value => {
+    assertEq(coerceCheckboxValue(value, false), false, "Active junk must stay off: " + value);
+  });
+  assertEq(coerceCheckboxValue("TRUE", false), true, "Active string TRUE must become boolean true");
+  assertEq(coerceCheckboxValue("", false), false, "Active blank stays off");
+}
+
+function test_coerceCheckboxValue_keepUnreadDefault_blankBecomesOn() {
+  // Keep Unread checkboxDefault true
+  assertEq(coerceCheckboxValue("", true), true, "Keep Unread blank → on");
+  assertEq(coerceCheckboxValue(null, true), true, "Keep Unread null → on");
+  assertEq(coerceCheckboxValue("FALSE", true), false, "Keep Unread FALSE stays off");
+  assertEq(coerceCheckboxValue(false, true), false, "Keep Unread boolean false stays off");
+  assertEq(coerceCheckboxValue(new Date(1899, 11, 30), true), false, "Keep Unread epoch → off not default");
+}
+
+function test_getCheckboxEditValue_readsEditEventStrings() {
+  assertEq(
+    getCheckboxEditValue({ value: "TRUE", range: { getValue: () => false } }),
+    true,
+    "onEdit TRUE string is checked"
+  );
+  assertEq(
+    getCheckboxEditValue({ value: "FALSE", range: { getValue: () => true } }),
+    false,
+    "onEdit FALSE string is unchecked"
+  );
+  assertEq(
+    getCheckboxEditValue({ value: undefined, range: { getValue: () => true } }),
+    true,
+    "missing edit value falls back to range boolean true"
+  );
+  assertEq(
+    getCheckboxEditValue({ value: "OTHER", range: { getValue: () => "TRUE" } }),
+    false,
+    "non TRUE/FALSE edit value still fail-closes via isCheckboxTrue on range"
+  );
+}
+
+function test_getActiveRules_stringFalseActive_isSkipped() {
+  const sheet = makeRulesSheet([["news@example.com", "count", 1, "FALSE", false, true]]);
+  const rules = getActiveRules(sheet);
+  assertEq(rules.length, 0, "String FALSE Active must be skipped");
+}
+
+function test_getActiveRules_numericActive_isSkipped() {
+  const sheet = makeRulesSheet([["news@example.com", "count", 1, 1, false, true]]);
+  const rules = getActiveRules(sheet);
+  assertEq(rules.length, 0, "Numeric Active must be skipped");
+}
+
+function test_getActiveRules_stringKeepUnread_isOff() {
+  const sheet = makeRulesSheet([["news@example.com", "count", 1, true, false, "TRUE"]]);
+  const rules = getActiveRules(sheet);
+  assertEq(rules.length, 1, "Boolean Active still selects rule");
+  assertEq(rules[0].keepUnread, false, "String TRUE Keep Unread must fail closed as off");
+}
+
+function test_getActiveRules_stringTest_isNotPreview() {
+  const sheet = makeRulesSheet([["news@example.com", "count", 1, true, "TRUE", true]]);
+  const rules = getActiveRules(sheet);
+  assertEq(rules.length, 1, "Boolean Active still selects rule");
+  assertEq(rules[0].test, false, "String TRUE Test must fail closed as live (not preview)");
+}
+
+function test_countActiveRules_matchesBooleanActiveOnly() {
+  const sheet = makeRulesSheet([
+    ["a@example.com", "count", 1, true, false, true],
+    ["b@example.com", "count", 1, "TRUE", false, true],
+    ["c@example.com", "count", 1, false, false, true],
+    ["d@example.com", "count", 1, 1, false, true],
+    ["e@example.com", "count", 1, "", false, true]
+  ]);
+  assertEq(countActiveRules(sheet), 1, "Only boolean true Active counts");
+}
+
+function test_getActiveSenderSet_ignoresStringTrue() {
+  const sheet = makeRulesSheet([
+    ["a@example.com", "count", 1, true, false, true],
+    ["b@example.com", "count", 1, "TRUE", false, true]
+  ]);
+  const active = getActiveSenderSet(sheet);
+  assertEq(active.has("a@example.com"), true, "Boolean Active sender included");
+  assertEq(active.has("b@example.com"), false, "String TRUE Active sender excluded");
+}
+
+function test_checkboxFormats_rejectPlainTextAndDates() {
+  assertEq(isPlainTextNumberFormat("@"), true, "@ is plain text");
+  assertEq(isPlainTextNumberFormat("@_"), true, "@_ is plain text");
+  assertEq(isPlainTextNumberFormat("General"), false, "General is not plain text");
+  assertEq(isPlainTextNumberFormat(""), false, "Empty is not plain text");
+
+  assertEq(registryFormatMatches("checkbox", "General"), true, "General OK for checkbox");
+  assertEq(registryFormatMatches("checkbox", ""), true, "Empty/automatic OK for checkbox");
+  assertEq(registryFormatMatches("checkbox", "@"), false, "Plain text not OK for checkbox");
+  assertEq(registryFormatMatches("checkbox", "m/d/yyyy"), false, "Date format not OK for checkbox");
+}
+
+function test_registryFormatPattern_checkboxUsesGeneral() {
+  assertEq(registryFormatPattern("checkbox"), "General", "Checkbox columns must use General");
+  assertEq(registryFormatPattern("text"), "@", "Text columns still use plain text");
+  assertEq(registryFormatPattern("number"), "0", "Number columns use 0");
 }
 
 function makeRulesSheet(rows) {

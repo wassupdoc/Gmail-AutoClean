@@ -6,6 +6,33 @@ Versions match `SCRIPT_VERSION` in `AutoClean.gs` (format `YYYYMMDD-N`).
 
 ---
 
+## 20260721-2
+
+### Fixed
+
+- Checkbox columns no longer use plain-text format (`@`). That format made clicks store the string `"TRUE"` / `"true"` and show “violates data validation rules.” Checkboxes now use **General** format.
+- Probe treats plain-text format as checkbox corruption so Verify/Fix / cleanup heal rewrites string TRUE cells back to real boolean checkboxes
+
+### Added
+
+- Self-tests for checkbox format rules (`General` required; `@` and date formats rejected)
+
+---
+
+## 20260721-1
+
+### Fixed
+
+- Checkbox heal no longer mass-unchecks Active when cells are string `"TRUE"`: heal uses `coerceCheckboxValue` (preserves checked intent as boolean), while live cleanup keeps fail-closed `isCheckboxTrue`
+- Heal rewrite order matches `applyCheckboxCell` (`insertCheckboxes` then `setValues`)
+
+### Added
+
+- Alert + log when cleanup finds **0 active rules**
+- Comprehensive checkbox self-tests: live fail-closed matrix, coerce edge matrix (Active vs Keep Unread defaults), `onEdit` TRUE/FALSE parsing, and Active/Test/Keep Unread / `countActiveRules` / `getActiveSenderSet` string/numeric corruption cases
+
+---
+
 ## 20260716-5
 
 ### Fixed

@@ -2,7 +2,7 @@
 
 This document explains how AutoClean is structured so another developer can understand it and extend it safely.
 
-It reflects script version **`20260716-5`** (`SCRIPT_VERSION` in `AutoClean.gs`).
+It reflects script version **`20260721-2`** (`SCRIPT_VERSION` in `AutoClean.gs`).
 
 Primary sources:
 
@@ -188,7 +188,7 @@ Reconcile exists to keep the registry **structurally healthy** without casually 
 3. `healKeepUnreadMisplacedDates`
 4. `applyRegistrySchemaFormats` — **formats only**
 5. `applyRegistryInputValidations` — Mode / Value only
-6. `healRegistryCheckboxColumnsIfNeeded` — **probe first**; rewrite only if corrupted
+6. `healRegistryCheckboxColumnsIfNeeded` — **probe first**; rewrite only if corrupted (`coerceCheckboxValue`, not live `isCheckboxTrue`)
 7. `healNumericStatColumns` — number format enforcement
 8. `syncLifetimeTotalsWithSheet` — `max(sheet, props)`
 9. Header ensure + dry-run header styling
@@ -296,16 +296,25 @@ Old keys used truncated slugs. On read, AutoClean migrates legacy → hashed key
 
 Checkbox corruption is common in Sheets (FALSE + date format → `12/30/1899`, pasted text, numbers, etc.).
 
+Plain-text number format (`@`) on checkbox cells is also harmful: clicks store the string `"TRUE"` and Sheets reports a validation error. Checkbox columns must use **General** format with boolean values.
+
 An earlier posture of “anything except FALSE is active” meant blank / junk Active rows could be processed **live**.
 
-Current contract (`isCheckboxTrue`):
+Two helpers at the sheet boundary:
+
+| Helper | Job | String `"TRUE"` |
+|--------|-----|-----------------|
+| `isCheckboxTrue` | Live decisions (fail closed) | **false** — skip until storage is boolean |
+| `coerceCheckboxValue` | Heal / new-row storage repair | **true** — write boolean `true` back |
+
+Live contract (`isCheckboxTrue`):
 
 ```javascript
 // Only explicit boolean true counts as checked.
 return value === true;
 ```
 
-Rejected: `"TRUE"`, `"true"`, `1`, dates (including Sheets epoch), `null`, blank, etc.
+Rejected for live processing: `"TRUE"`, `"true"`, `1`, dates (including Sheets epoch), `null`, blank, etc.
 
 Used by:
 
@@ -314,6 +323,8 @@ Used by:
 - `countActiveRules`
 - `isActiveRow`
 - Test / Keep Unread helpers
+
+`healRegistryCheckboxColumnsIfNeeded` and `applyRegistryRowFormatting` use `coerceCheckboxValue` so repair never routes string checked values through the live fail-closed helper.
 
 `onEdit` still understands edit-event `"TRUE"`/`"FALSE"` strings from the UI, then persists boolean checkbox values.
 

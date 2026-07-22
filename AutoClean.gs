@@ -20,7 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  ***************/
 
-const SCRIPT_VERSION = "20260716-5";
+const SCRIPT_VERSION = "20260721-2";
 const SCRIPT_REPOSITORY_URL = "https://github.com/wassupdoc/Gmail-AutoClean";
 
 const GLOBAL_DRY_RUN = false; // Developer-only safety switch; not shown in the UI (use Menu Dry Run)
@@ -193,10 +193,27 @@ function getCheckboxEditValue(e) {
 }
 
 function isCheckboxTrue(value) {
-  // Fail closed: only an explicit boolean true counts as checked.
+  // Fail closed (live decisions): only an explicit boolean true counts as checked.
   // Strings, numbers, dates, and null/blank are treated as unchecked.
   if (isSheetsEpochDate(value)) return false;
   return value === true;
+}
+
+/**
+ * Storage / heal coerce: map Sheets checkbox cells to real booleans.
+ * Live cleanup must keep using isCheckboxTrue (fail closed).
+ */
+function coerceCheckboxValue(value, defaultChecked) {
+  if (value === true || value === false) return value;
+  if (isSheetsEpochDate(value)) return false;
+  if (isDateValue(value)) return defaultChecked === true;
+  if (value === "" || value === null || value === undefined) return defaultChecked === true;
+
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "") return defaultChecked === true;
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  return false;
 }
 
 function setCheckboxValue(cell, checked) {
@@ -254,6 +271,7 @@ function runAutoCleanBody(runFull) {
   assertRegistryHeaders(sheet);
   ensureLabelsExist();
   const managedLabel = getOrCreateLabel(MANAGED_LABEL_NAME);
+  const hasUi = !!SpreadsheetApp.getActiveSpreadsheet();
 
   const globalDryRun = GLOBAL_DRY_RUN || getMenuDryRun();
   
@@ -263,6 +281,15 @@ function runAutoCleanBody(runFull) {
   syncManagedLabels(sheet);
 
   const allRules = getActiveRules(sheet);
+  if (allRules.length === 0) {
+    const zeroActiveMessage =
+      "AutoClean found 0 active rules. Check the Active column in the registry (only a checked Active box runs cleanup).";
+    Logger.log(zeroActiveMessage);
+    if (hasUi) {
+      SpreadsheetApp.getUi().alert(zeroActiveMessage);
+    }
+  }
+
   const batchInfo = runFull ? getFullBatch(allRules) : getNextBatch(allRules);
   const rules = batchInfo.rules;
   const batchLabel = batchInfo.label;
@@ -895,7 +922,7 @@ function migrateAddKeepUnreadColumn(sheet) {
   if (lastRow >= 2) {
     const range = getRegistryColumnRange(sheet, COL.KEEP_UNREAD, lastRow);
     range.clearDataValidations();
-    range.setNumberFormat("@");
+    range.setNumberFormat("General");
     range.insertCheckboxes();
     range.setValue(true);
   }
@@ -979,9 +1006,15 @@ function isDateLikeNumberFormat(format) {
   return actual.includes("y") || actual.includes("d") || actual.includes("m") || actual.includes("h");
 }
 
+/** Plain text (@) makes checkbox clicks store "TRUE" strings and fail validation. */
+function isPlainTextNumberFormat(format) {
+  const actual = String(format || "").trim().toLowerCase();
+  return actual === "@" || actual.startsWith("@");
+}
+
 function applyCheckboxCell(cell, checked) {
   cell.clearDataValidations();
-  cell.setNumberFormat("@");
+  cell.setNumberFormat("General");
   cell.insertCheckboxes();
   cell.setValue(!!checked);
 }
@@ -1096,7 +1129,10 @@ function healKeepUnreadMisplacedDates(sheet) {
 
 function checkboxColumnNeedsHeal(sheet, column, lastDataRow) {
   if (!columnHasCheckboxValidation(sheet, 2, column.col)) return true;
-  if (isDateLikeNumberFormat(sheet.getRange(2, column.col).getNumberFormat())) return true;
+
+  const sampleFormat = sheet.getRange(2, column.col).getNumberFormat();
+  if (isDateLikeNumberFormat(sampleFormat)) return true;
+  if (isPlainTextNumberFormat(sampleFormat)) return true;
 
   const range = getRegistryColumnRange(sheet, column.col, lastDataRow);
   const formats = range.getNumberFormats();
@@ -1104,6 +1140,7 @@ function checkboxColumnNeedsHeal(sheet, column, lastDataRow) {
 
   for (let i = 0; i < formats.length; i++) {
     if (isDateLikeNumberFormat(formats[i][0])) return true;
+    if (isPlainTextNumberFormat(formats[i][0])) return true;
 
     const value = values[i][0];
     if (isSheetsEpochDate(value)) return true;
@@ -1116,7 +1153,7 @@ function checkboxColumnNeedsHeal(sheet, column, lastDataRow) {
 
 /**
  * Probe checkbox columns; only rewrite when corrupted.
- * Preserves existing TRUE/FALSE. Epoch dates become FALSE.
+ * Coerces string TRUE/FALSE to booleans. Epoch dates become FALSE.
  * Real misplaced dates should already be handled by healKeepUnreadMisplacedDates.
  */
 function healRegistryCheckboxColumnsIfNeeded(sheet) {
@@ -1131,22 +1168,18 @@ function healRegistryCheckboxColumnsIfNeeded(sheet) {
 
     const range = getRegistryColumnRange(sheet, column.col, lastDataRow);
     const values = range.getValues();
+    const defaultChecked = column.checkboxDefault === true;
 
     const preservedValues = values.map(row => {
-      const value = row[0];
-
-      if (value === true || value === false) return [value];
-      if (isSheetsEpochDate(value)) return [false];
-      if (isDateValue(value)) return [column.checkboxDefault === true];
-      if (value === "" || value === null) return [column.checkboxDefault === true];
-      return [isCheckboxTrue(value)];
+      return [coerceCheckboxValue(row[0], defaultChecked)];
     });
 
+    // General format (not @): plain text makes clicks store "TRUE" and fail validation.
     range.clearDataValidations();
-    range.setNumberFormat("@");
-    range.setValues(preservedValues);
+    range.setNumberFormat("General");
     range.insertCheckboxes();
-    getRegistryOpenColumnRange(sheet, column.col).setNumberFormat("@");
+    range.setValues(preservedValues);
+    getRegistryOpenColumnRange(sheet, column.col).setNumberFormat("General");
     healed++;
   });
 
@@ -1337,7 +1370,9 @@ function registryFormatPattern(type) {
   if (type === "datetime") return "m/d/yyyy h:mm:ss";
   if (type === "date") return "m/d/yyyy";
   if (type === "number" || type === "positiveNumber") return "0";
-  // text, formula, checkbox, list
+  // Checkbox must use General — plain text (@) stores clicks as "TRUE" strings.
+  if (type === "checkbox") return "General";
+  // text, formula, list
   return "@";
 }
 
@@ -1345,8 +1380,10 @@ function registryFormatMatches(type, format) {
   const actual = String(format || "").trim().toLowerCase();
 
   if (type === "checkbox") {
-    // Checkbox columns must not use date/time formats (FALSE → 12/30/1899).
-    return !isDateLikeNumberFormat(format);
+    // Reject date formats (FALSE → 12/30/1899) and plain text (@ → "TRUE" validation errors).
+    if (isDateLikeNumberFormat(format)) return false;
+    if (isPlainTextNumberFormat(format)) return false;
+    return true;
   }
 
   if (type === "text" || type === "list" || type === "formula") {
@@ -1527,9 +1564,7 @@ function applyRegistryRowFormatting(sheet, row) {
     const cell = sheet.getRange(row, column.col);
 
     if (column.type === "checkbox") {
-      const current = cell.getValue();
-      const checked = isCheckboxTrue(current) ||
-        ((current === "" || current === null) && column.checkboxDefault === true);
+      const checked = coerceCheckboxValue(cell.getValue(), column.checkboxDefault === true);
       applyCheckboxCell(cell, checked);
     }
   });
